@@ -1,6 +1,6 @@
 project('gstreamer', 'c',
   version : '1.15.0.1',
-  meson_version : '>= 0.46',
+  meson_version : '>= 0.47',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
 
@@ -14,6 +14,7 @@ if version_arr.length() == 4
 else
   gst_version_nano = 0
 endif
+gst_version_is_dev = gst_version_minor % 2 == 1 and gst_version_micro < 90
 
 host_system = host_machine.system()
 
@@ -21,15 +22,18 @@ apiversion = '1.0'
 soversion = 0
 # maintaining compatibility with the previous libtool versioning
 # current = minor * 100 + micro
-libversion = '@0@.@1@.0'.format(soversion, gst_version_minor * 100 + gst_version_micro)
+curversion = gst_version_minor * 100 + gst_version_micro
+libversion = '@0@.@1@.0'.format(soversion, curversion)
+osxversion = curversion + 1
 
 prefix = get_option('prefix')
-libtype = get_option('default_library')
 
 libexecdir = get_option('libexecdir')
 helpers_install_dir = join_paths(libexecdir, 'gstreamer-1.0')
 
 cc = meson.get_compiler('c')
+
+cdata = configuration_data()
 
 # Ignore several spurious warnings for things gstreamer does very commonly
 # If a warning is completely useless and spammy, use '/wdXXXX' to suppress it
@@ -41,6 +45,7 @@ if cc.get_id() == 'msvc'
       '/wd4146', # unary minus on unsigned (beware INT_MIN)
       '/wd4244', # lossy type conversion (e.g. double -> int)
       '/wd4305', # truncating type conversion (e.g. double -> float)
+      cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
       language : 'c')
 elif cc.has_link_argument('-Wl,-Bsymbolic-functions')
   # FIXME: Add an option for this if people ask for it
@@ -48,17 +53,49 @@ elif cc.has_link_argument('-Wl,-Bsymbolic-functions')
 endif
 
 # Symbol visibility
-have_visibility_hidden = cc.has_argument('-fvisibility=hidden')
-if have_visibility_hidden
+have_visibility_hidden = false
+if cc.get_id() == 'msvc'
+  export_define = '__declspec(dllexport) extern'
+elif cc.has_argument('-fvisibility=hidden')
   add_project_arguments('-fvisibility=hidden', language: 'c')
+  export_define = 'extern __attribute__ ((visibility ("default")))'
+  have_visibility_hidden = true
+else
+  export_define = 'extern'
 endif
+
+# Passing this through the command line would be too messy
+cdata.set('GST_API_EXPORT', export_define)
 
 # Disable strict aliasing
 if cc.has_argument('-fno-strict-aliasing')
   add_project_arguments('-fno-strict-aliasing', language: 'c')
 endif
 
-cdata = configuration_data()
+# Define G_DISABLE_DEPRECATED for development versions
+if gst_version_is_dev
+  message('Disabling deprecated GLib API')
+  add_project_arguments('-DG_DISABLE_DEPRECATED', language: 'c')
+endif
+
+cast_checks = get_option('gobject-cast-checks')
+if cast_checks.disabled() or (cast_checks.auto() and not gst_version_is_dev)
+  message('Disabling GLib cast checks')
+  add_project_arguments('-DG_DISABLE_CAST_CHECKS', language: 'c')
+endif
+
+glib_asserts = get_option('glib-asserts')
+if glib_asserts.disabled() or (glib_asserts.auto() and not gst_version_is_dev)
+  message('Disabling GLib asserts')
+  add_project_arguments('-DG_DISABLE_ASSERT', language: 'c')
+endif
+
+glib_checks = get_option('glib-checks')
+if glib_checks.disabled() or (glib_checks.auto() and not gst_version_is_dev)
+  message('Disabling GLib checks')
+  add_project_arguments('-DG_DISABLE_CHECKS', language: 'c')
+endif
+
 cdata.set_quoted('GST_API_VERSION', apiversion)
 cdata.set_quoted('GST_DATADIR', join_paths(prefix, get_option('datadir')))
 cdata.set_quoted('LOCALEDIR', join_paths(prefix, get_option('localedir')))
@@ -75,15 +112,22 @@ cdata.set_quoted('PACKAGE_URL', '')
 cdata.set_quoted('PACKAGE_VERSION', gst_version)
 cdata.set_quoted('PLUGINDIR', join_paths(get_option('prefix'), get_option('libdir'), 'gstreamer-1.0'))
 cdata.set_quoted('VERSION', gst_version)
-# FIXME: --with-memory-alignment],[8,N,malloc,pagesize (default is 32)]) option
-cdata.set('MEMORY_ALIGNMENT_MALLOC', 1)
-cdata.set('ENABLE_NLS', get_option('nls'))
 cdata.set_quoted('GST_PLUGIN_SCANNER_INSTALLED', join_paths(prefix, helpers_install_dir, 'gst-plugin-scanner'))
 cdata.set_quoted('GST_PTP_HELPER_INSTALLED', join_paths(prefix, helpers_install_dir, 'gst-ptp-helper'))
 cdata.set_quoted('GST_PLUGIN_SCANNER_SUBDIR', libexecdir,
   description: 'libexecdir path component, used to find plugin-scanner on relocatable builds on windows')
+cdata.set('GST_DISABLE_OPTION_PARSING', not get_option('option-parsing'))
 
-if host_system == 'darwin'
+mem_align_opt = get_option('memory-alignment')
+if mem_align_opt == 'malloc'
+  cdata.set('MEMORY_ALIGNMENT_MALLOC', 1)
+elif mem_align_opt == 'pagesize'
+  cdata.set('MEMORY_ALIGNMENT_PAGESIZE', 1)
+else
+  cdata.set('MEMORY_ALIGNMENT', mem_align_opt.to_int())
+endif
+
+if ['darwin', 'ios'].contains(host_system)
   cdata.set_quoted('GST_EXTRA_MODULE_SUFFIX', '.dylib')
 endif
 
@@ -157,7 +201,7 @@ check_headers = [
   'sys/resource.h',
 ]
 
-if host_machine.system() == 'windows'
+if host_system == 'windows'
   check_headers += ['winsock2.h']
 endif
 
@@ -270,7 +314,7 @@ if cc.has_function('strdup')
 elif host_system == 'windows' and cc.has_function('_strdup')
   cdata.set('HAVE__STRDUP', 1) # Windows (MSVC)
 endif
-if host_machine.system() != 'windows'
+if host_system != 'windows'
   cdata.set('HAVE_FORK', 1)
 else
   # libcheck requires HAVE_FORK to be 0 when fork() is not available
@@ -297,28 +341,26 @@ endif
 
 # Platform deps; only ws2_32 and execinfo for now
 platform_deps = []
-if host_machine.system() == 'windows'
+if host_system == 'windows'
   platform_deps = [cc.find_library('ws2_32')]
 endif
 
 backtrace_deps = []
-if get_option('libunwind')
-  unwind_dep = dependency('libunwind', required : false)
-  dw_dep = dependency('libdw', required: false)
-  backtrace_deps = [unwind_dep, dw_dep]
-  if unwind_dep.found()
-    cdata.set('HAVE_UNWIND', 1)
-    if dw_dep.found()
-      cdata.set('HAVE_DW', 1)
-    else
-      message('Support for backtraces is partial only.')
-    endif
+unwind_dep = dependency('libunwind', required : get_option('libunwind'))
+dw_dep = dependency('libdw', required: get_option('libunwind'))
+backtrace_deps = [unwind_dep, dw_dep]
+if unwind_dep.found()
+  cdata.set('HAVE_UNWIND', 1)
+  if dw_dep.found()
+    cdata.set('HAVE_DW', 1)
   else
-    if cc.has_function('backtrace')
-      cdata.set('HAVE_BACKTRACE', 1)
-    else
-        message('NO backtraces support.')
-    endif
+    message('Support for backtraces is partial only.')
+  endif
+else
+  if cc.has_function('backtrace')
+    cdata.set('HAVE_BACKTRACE', 1)
+  else
+      message('NO backtraces support.')
   endif
 endif
 
@@ -377,7 +419,8 @@ test_deps = [gmp_dep, gsl_dep, gslcblas_dep]
 # Used by gstinfo.c
 dl_dep = cc.find_library('dl', required : false)
 cdata.set('HAVE_DLADDR', cc.has_function('dladdr', dependencies : dl_dep))
-cdata.set10('GST_ENABLE_EXTRA_CHECKS', get_option('extra-checks'))
+cdata.set('GST_ENABLE_EXTRA_CHECKS', get_option('extra-checks'))
+cdata.set('USE_POISONING', get_option('poisoning'))
 
 configinc = include_directories('.')
 libsinc = include_directories('libs')
@@ -390,7 +433,7 @@ gobject_dep = dependency('gobject-2.0',
   fallback: ['glib', 'libgobject_dep'])
 gmodule_dep = dependency('gmodule-2.0',
   fallback: ['glib', 'libgmodule_dep'])
-if host_machine.system() == 'windows'
+if host_system == 'windows'
     gio_dep = dependency('gio-2.0',
         fallback: ['glib', 'libgio_dep'])
 else
@@ -405,11 +448,10 @@ mathlib = cc.find_library('m', required : false)
 # Also provides clock_gettime in glibc < 2.17
 rt_lib = cc.find_library('rt', required : false)
 
-gir = find_program('g-ir-scanner', required : false)
+gir = find_program('g-ir-scanner', required : get_option('introspection'))
 gnome = import('gnome')
 
-# Fixme, not very elegant.
-build_gir = gir.found() and not meson.is_cross_build() and get_option('introspection')
+build_gir = gir.found() and not meson.is_cross_build()
 
 gir_init_section = [ '--add-init-section=extern void gst_init(gint*,gchar**);' + \
     'g_setenv("GST_REGISTRY_DISABLE", "yes", TRUE);' + \
@@ -421,46 +463,42 @@ gir_init_section = [ '--add-init-section=extern void gst_init(gint*,gchar**);' +
 gst_c_args = ['-DHAVE_CONFIG_H']
 
 # FIXME: This is only needed on windows and probably breaks when
-# libtype=='both'. We should add this flag to static_c_args instead when Meson
-# supports it: https://github.com/mesonbuild/meson/issues/3304
-if libtype == 'static'
+# default_library = 'both'. We should add this flag to static_c_args instead
+# when Meson supports it: https://github.com/mesonbuild/meson/issues/3304
+if get_option('default_library') == 'static'
   gst_c_args += ['-DGST_STATIC_COMPILATION']
 endif
 
 # Used in gst/parse/meson.build and below
 python3 = import('python3').find_python()
 
-bashcomp_dep = dependency('bash-completion', version : '>= 2.0', required : false)
-
-bashcomp_found = bashcomp_dep.found()
+bashcomp_option = get_option('bash-completion')
+bashcomp_dep = dependency('bash-completion', version : '>= 2.0', required : bashcomp_option)
 bash_completions_dir = ''
 bash_helpers_dir = ''
 
-if bashcomp_found
-  # get_pkgconfig_variable() won't let us set the prefix
-  pkgconfig = find_program('pkg-config')
-
-  runcmd = run_command(pkgconfig,
-      '--define-variable=prefix=.',
-      '--variable=completionsdir',
-      'bash-completion')
-
-  if (runcmd.returncode() == 0)
-    bash_completions_dir = runcmd.stdout().strip()
-  else
-    message('Found bash-completion but the .pc file did not set \'completionsdir\'.')
+bashcomp_found = false
+if bashcomp_dep.found()
+  bashcomp_found = true
+  bash_completions_dir = bashcomp_dep.get_pkgconfig_variable('completionsdir', define_variable: ['prefix', '.'])
+  if bash_completions_dir == ''
+    msg = 'Found bash-completion but the .pc file did not set \'completionsdir\'.'
+    if bashcomp_option.enabled()
+      error(msg)
+    else
+      message(msg)
+    endif
     bashcomp_found = false
   endif
 
-  runcmd = run_command(pkgconfig,
-      '--define-variable=prefix=.',
-      '--variable=helpersdir',
-      'bash-completion')
-
-  if (runcmd.returncode() == 0)
-    bash_helpers_dir = runcmd.stdout().strip()
-  else
-    message('Found bash-completion, but the .pc file did not set \'helpersdir\'.')
+  bash_helpers_dir = bashcomp_dep.get_pkgconfig_variable('helpersdir', define_variable: ['prefix', '.'])
+  if bash_helpers_dir == ''
+    msg = 'Found bash-completion, but the .pc file did not set \'helpersdir\'.'
+    if bashcomp_option.enabled()
+      error(msg)
+    else
+      message(msg)
+    endif
     bashcomp_found = false
   endif
 endif
@@ -468,13 +506,16 @@ endif
 subdir('gst')
 subdir('libs')
 subdir('plugins')
-subdir('tools')
+if not get_option('tools').disabled()
+  subdir('tools')
+endif
 subdir('pkgconfig')
 subdir('tests')
 subdir('data')
 
 # xgettext is optional (on Windows for instance)
-if get_option('nls') and find_program('xgettext', required : false).found()
+if find_program('xgettext', required : get_option('nls')).found()
+  cdata.set('ENABLE_NLS', 1)
   subdir('po')
 endif
 
@@ -482,10 +523,8 @@ configure_file(output : 'config.h', configuration : cdata)
 
 if build_machine.system() == 'windows'
   message('Disabling gtk-doc while building on Windows')
-elif not get_option('gtk_doc')
-  message('gtk-doc is disabled via options')
 else
-  if find_program('gtkdoc-scan', required : false).found()
+  if find_program('gtkdoc-scan', required : get_option('gtk_doc')).found()
     subdir('docs')
   else
     message('Not building documentation as gtk-doc was not found')

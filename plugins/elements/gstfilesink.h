@@ -80,7 +80,9 @@ struct _GstFileSink {
 
   gint    buffer_mode;
   guint   buffer_size;
-  gchar  *buffer;
+
+  GstBufferList *buffer;
+  guint   current_buffer_size;
 
   gboolean append;
 };

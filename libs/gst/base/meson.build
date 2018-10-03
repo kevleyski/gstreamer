@@ -42,9 +42,10 @@ gst_base_gen_sources = []
 
 gst_base = library('gstbase-@0@'.format(apiversion),
   gst_base_sources,
-  c_args : gst_c_args,
+  c_args : gst_c_args + ['-DBUILDING_GST_BASE'],
   version : libversion,
   soversion : soversion,
+  darwin_versions : osxversion,
   install : true,
   include_directories : [configinc, libsinc],
   dependencies : [gobject_dep, glib_dep, gst_dep],

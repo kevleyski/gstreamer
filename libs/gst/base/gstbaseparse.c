@@ -47,17 +47,17 @@
  *
  * ## Set-up phase
  *
- *  * #GstBaseParse calls @start to inform subclass that data processing is
- *    about to start now.
+ *  * #GstBaseParse calls #GstBaseParseClass.start() to inform subclass
+ *    that data processing is about to start now.
  *
- *  * #GstBaseParse class calls @set_sink_caps to inform the subclass about
- *    incoming sinkpad caps. Subclass could already set the srcpad caps
- *    accordingly, but this might be delayed until calling
- *    gst_base_parse_finish_frame() with a non-queued frame.
+ *  * #GstBaseParse class calls #GstBaseParseClass.set_sink_caps() to
+ *    inform the subclass about incoming sinkpad caps. Subclass could
+ *    already set the srcpad caps accordingly, but this might be delayed
+ *    until calling gst_base_parse_finish_frame() with a non-queued frame.
  *
  *  * At least at this point subclass needs to tell the #GstBaseParse class
- *    how big data chunks it wants to receive (min_frame_size). It can do
- *    this with gst_base_parse_set_min_frame_size().
+ *    how big data chunks it wants to receive (minimum frame size ). It can
+ *    do this with gst_base_parse_set_min_frame_size().
  *
  *  * #GstBaseParse class sets up appropriate data passing mode (pull/push)
  *    and starts to process the data.
@@ -68,24 +68,27 @@
  *    by pulling it from upstream or collecting buffers in an internal
  *    #GstAdapter.
  *
- *  * A buffer of (at least) min_frame_size bytes is passed to subclass with
- *    @handle_frame. Subclass checks the contents and can optionally
- *    return GST_FLOW_OK along with an amount of data to be skipped to find
- *    a valid frame (which will result in a subsequent DISCONT).
- *    If, otherwise, the buffer does not hold a complete frame,
- *    @handle_frame can merely return and will be called again when additional
- *    data is available.  In push mode this amounts to an
- *    additional input buffer (thus minimal additional latency), in pull mode
- *    this amounts to some arbitrary reasonable buffer size increase.
- *    Of course, gst_base_parse_set_min_frame_size() could also be used if a
- *    very specific known amount of additional data is required.
- *    If, however, the buffer holds a complete valid frame, it can pass
- *    the size of this frame to gst_base_parse_finish_frame().
- *    If acting as a converter, it can also merely indicate consumed input data
- *    while simultaneously providing custom output data.
- *    Note that baseclass performs some processing (such as tracking
- *    overall consumed data rate versus duration) for each finished frame,
- *    but other state is only updated upon each call to @handle_frame
+ *  * A buffer of (at least) min_frame_size bytes is passed to subclass
+ *    with #GstBaseParseClass.handle_frame(). Subclass checks the contents
+ *    and can optionally return #GST_FLOW_OK along with an amount of data
+ *    to be skipped to find a valid frame (which will result in a
+ *    subsequent DISCONT).  If, otherwise, the buffer does not hold a
+ *    complete frame, #GstBaseParseClass.handle_frame() can merely return
+ *    and will be called again when additional data is available.  In push
+ *    mode this amounts to an additional input buffer (thus minimal
+ *    additional latency), in pull mode this amounts to some arbitrary
+ *    reasonable buffer size increase.
+ *
+ *    Of course, gst_base_parse_set_min_frame_size() could also be used if
+ *    a very specific known amount of additional data is required.  If,
+ *    however, the buffer holds a complete valid frame, it can pass the
+ *    size of this frame to gst_base_parse_finish_frame().
+ *
+ *    If acting as a converter, it can also merely indicate consumed input
+ *    data while simultaneously providing custom output data.  Note that
+ *    baseclass performs some processing (such as tracking overall consumed
+ *    data rate versus duration) for each finished frame, but other state
+ *    is only updated upon each call to #GstBaseParseClass.handle_frame()
  *    (such as tracking upstream input timestamp).
  *
  *    Subclass is also responsible for setting the buffer metadata
@@ -96,28 +99,30 @@
  *    duration obtained from configuration (see below), and offset
  *    if meaningful (in pull mode).
  *
- *    Note that @check_valid_frame might receive any small
- *    amount of input data when leftover data is being drained (e.g. at EOS).
+ *    Note that #GstBaseParseClass.handle_frame() might receive any small
+ *    amount of input data when leftover data is being drained (e.g. at
+ *    EOS).
  *
- *  * As part of finish frame processing,
- *    just prior to actually pushing the buffer in question,
- *    it is passed to @pre_push_frame which gives subclass yet one
- *    last chance to examine buffer metadata, or to send some custom (tag)
+ *  * As part of finish frame processing, just prior to actually pushing
+ *    the buffer in question, it is passed to
+ *    #GstBaseParseClass.pre_push_frame() which gives subclass yet one last
+ *    chance to examine buffer metadata, or to send some custom (tag)
  *    events, or to perform custom (segment) filtering.
  *
  *  * During the parsing process #GstBaseParseClass will handle both srcpad
- *    and sinkpad events. They will be passed to subclass if @event or
- *    @src_event callbacks have been provided.
+ *    and sinkpad events. They will be passed to subclass if
+ *    #GstBaseParseClass.event() or #GstBaseParseClass.src_event()
+ *    implementations have been provided.
  *
  * ## Shutdown phase
  *
- * * #GstBaseParse class calls @stop to inform the subclass that data
- *   parsing will be stopped.
+ * * #GstBaseParse class calls #GstBaseParseClass.stop() to inform the
+ *   subclass that data parsing will be stopped.
  *
- * Subclass is responsible for providing pad template caps for
- * source and sink pads. The pads need to be named "sink" and "src". It also
- * needs to set the fixed caps on srcpad, when the format is ensured (e.g.
- * when base class calls subclass' @set_sink_caps function).
+ * Subclass is responsible for providing pad template caps for source and
+ * sink pads. The pads need to be named "sink" and "src". It also needs to
+ * set the fixed caps on srcpad, when the format is ensured (e.g.  when
+ * base class calls subclass' #GstBaseParseClass.set_sink_caps() function).
  *
  * This base class uses %GST_FORMAT_DEFAULT as a meaning of frames. So,
  * subclass conversion routine needs to know that conversion from
@@ -136,9 +141,10 @@
  * * Fixate the source pad caps when appropriate
  * * Inform base class how big data chunks should be retrieved. This is
  *   done with gst_base_parse_set_min_frame_size() function.
- * * Examine data chunks passed to subclass with @handle_frame and pass
- *   proper frame(s) to gst_base_parse_finish_frame(), and setting src pad
- *   caps and timestamps on frame.
+ * * Examine data chunks passed to subclass with
+ *   #GstBaseParseClass.handle_frame() and pass proper frame(s) to
+ *   gst_base_parse_finish_frame(), and setting src pad caps and timestamps
+ *   on frame.
  * * Provide conversion functions
  * * Update the duration information with gst_base_parse_set_duration()
  * * Optionally passthrough using gst_base_parse_set_passthrough()
@@ -148,13 +154,14 @@
  *
  * * In particular, if subclass is unable to determine a duration, but
  *   parsing (or specs) yields a frames per seconds rate, then this can be
- *   provided to #GstBaseParse to enable it to cater for
- *   buffer time metadata (which will be taken from upstream as much as
+ *   provided to #GstBaseParse to enable it to cater for buffer time
+ *   metadata (which will be taken from upstream as much as
  *   possible). Internally keeping track of frame durations and respective
  *   sizes that have been pushed provides #GstBaseParse with an estimated
- *   bitrate. A default @convert (used if not overridden) will then use these
- *   rates to perform obvious conversions.  These rates are also used to
- *   update (estimated) duration at regular frame intervals.
+ *   bitrate. A default #GstBaseParseClass.convert() (used if not
+ *   overridden) will then use these rates to perform obvious conversions.
+ *   These rates are also used to update (estimated) duration at regular
+ *   frame intervals.
  *
  */
 
@@ -199,9 +206,6 @@ static const GstFormat fmtlist[] = {
   GST_FORMAT_TIME,
   GST_FORMAT_UNDEFINED
 };
-
-#define GST_BASE_PARSE_GET_PRIVATE(obj)  \
-    (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_BASE_PARSE, GstBaseParsePrivate))
 
 struct _GstBaseParsePrivate
 {
@@ -336,6 +340,9 @@ struct _GstBaseParsePrivate
   GstTagList *parser_tags;
   GstTagMergeMode parser_tags_merge_mode;
   gboolean tags_changed;
+
+  /* Current segment seqnum */
+  guint32 segment_seqnum;
 };
 
 typedef struct _GstBaseParseSeek
@@ -361,6 +368,7 @@ enum
   g_mutex_unlock (&parse->priv->index_lock);
 
 static GstElementClass *parent_class = NULL;
+static gint base_parse_private_offset = 0;
 
 static void gst_base_parse_class_init (GstBaseParseClass * klass);
 static void gst_base_parse_init (GstBaseParse * parse,
@@ -387,9 +395,19 @@ gst_base_parse_get_type (void)
 
     _type = g_type_register_static (GST_TYPE_ELEMENT,
         "GstBaseParse", &base_parse_info, G_TYPE_FLAG_ABSTRACT);
+
+    base_parse_private_offset =
+        g_type_add_instance_private (_type, sizeof (GstBaseParsePrivate));
+
     g_once_init_leave (&base_parse_type, _type);
   }
   return (GType) base_parse_type;
+}
+
+static inline GstBaseParsePrivate *
+gst_base_parse_get_instance_private (GstBaseParse * self)
+{
+  return (G_STRUCT_MEMBER_P (self, base_parse_private_offset));
 }
 
 static void gst_base_parse_finalize (GObject * object);
@@ -521,7 +539,10 @@ gst_base_parse_class_init (GstBaseParseClass * klass)
   GstElementClass *gstelement_class;
 
   gobject_class = G_OBJECT_CLASS (klass);
-  g_type_class_add_private (klass, sizeof (GstBaseParsePrivate));
+
+  if (base_parse_private_offset != 0)
+    g_type_class_adjust_private_offset (klass, &base_parse_private_offset);
+
   parent_class = g_type_class_peek_parent (klass);
 
   gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_base_parse_finalize);
@@ -571,7 +592,7 @@ gst_base_parse_init (GstBaseParse * parse, GstBaseParseClass * bclass)
 
   GST_DEBUG_OBJECT (parse, "gst_base_parse_init");
 
-  parse->priv = GST_BASE_PARSE_GET_PRIVATE (parse);
+  parse->priv = gst_base_parse_get_instance_private (parse);
 
   pad_template =
       gst_element_class_get_pad_template (GST_ELEMENT_CLASS (bclass), "sink");
@@ -655,6 +676,15 @@ gst_base_parse_get_property (GObject * object, guint prop_id, GValue * value,
   }
 }
 
+/**
+ * gst_base_parse_frame_copy:
+ * @frame: a #GstBaseParseFrame
+ *
+ * Copies a #GstBaseParseFrame.
+ *
+ * Returns: A copy of @frame
+ */
+
 GstBaseParseFrame *
 gst_base_parse_frame_copy (GstBaseParseFrame * frame)
 {
@@ -669,6 +699,12 @@ gst_base_parse_frame_copy (GstBaseParseFrame * frame)
   return copy;
 }
 
+/**
+ * gst_base_parse_frame_free:
+ * @frame: A #GstBaseParseFrame
+ *
+ * Frees the provided @frame.
+ */
 void
 gst_base_parse_frame_free (GstBaseParseFrame * frame)
 {
@@ -859,6 +895,8 @@ gst_base_parse_reset (GstBaseParse * parse)
   g_list_free (parse->priv->detect_buffers);
   parse->priv->detect_buffers = NULL;
   parse->priv->detect_buffers_size = 0;
+
+  parse->priv->segment_seqnum = GST_SEQNUM_INVALID;
   GST_OBJECT_UNLOCK (parse);
 }
 
@@ -1164,14 +1202,16 @@ gst_base_parse_sink_event_default (GstBaseParse * parse, GstEvent * event)
       const GstSegment *in_segment;
       GstSegment out_segment;
       gint64 offset = 0, next_dts;
-      guint32 seqnum = gst_event_get_seqnum (event);
 
+      parse->priv->segment_seqnum = gst_event_get_seqnum (event);
       gst_event_parse_segment (event, &in_segment);
       gst_segment_init (&out_segment, GST_FORMAT_TIME);
       out_segment.rate = in_segment->rate;
       out_segment.applied_rate = in_segment->applied_rate;
 
-      GST_DEBUG_OBJECT (parse, "segment %" GST_SEGMENT_FORMAT, in_segment);
+      GST_DEBUG_OBJECT (parse, "New segment %" GST_SEGMENT_FORMAT, in_segment);
+      GST_DEBUG_OBJECT (parse, "Current segment %" GST_SEGMENT_FORMAT,
+          &parse->segment);
 
       parse->priv->upstream_format = in_segment->format;
       if (in_segment->format == GST_FORMAT_BYTES) {
@@ -1223,7 +1263,7 @@ gst_base_parse_sink_event_default (GstBaseParse * parse, GstEvent * event)
         gst_event_unref (event);
 
         event = gst_event_new_segment (&out_segment);
-        gst_event_set_seqnum (event, seqnum);
+        gst_event_set_seqnum (event, parse->priv->segment_seqnum);
 
         GST_DEBUG_OBJECT (parse, "Converted incoming segment to TIME. %"
             GST_SEGMENT_FORMAT, in_segment);
@@ -1238,7 +1278,7 @@ gst_base_parse_sink_event_default (GstBaseParse * parse, GstEvent * event)
         out_segment.time = 0;
 
         event = gst_event_new_segment (&out_segment);
-        gst_event_set_seqnum (event, seqnum);
+        gst_event_set_seqnum (event, parse->priv->segment_seqnum);
 
         next_dts = 0;
       } else {
@@ -1249,6 +1289,8 @@ gst_base_parse_sink_event_default (GstBaseParse * parse, GstEvent * event)
         gst_event_copy_segment (event, &out_segment);
       }
 
+      GST_DEBUG_OBJECT (parse, "OUT segment %" GST_SEGMENT_FORMAT,
+          &out_segment);
       memcpy (&parse->segment, &out_segment, sizeof (GstSegment));
 
       /*
@@ -1651,7 +1693,7 @@ gst_base_parse_src_event_default (GstBaseParse * parse, GstEvent * event)
  * @dest_format: #GstFormat defining the converted format.
  * @dest_value: (out): Pointer where the conversion result will be put.
  *
- * Default implementation of "convert" vmethod in #GstBaseParse class.
+ * Default implementation of #GstBaseParseClass.convert().
  *
  * Returns: %TRUE if conversion was successful.
  */
@@ -1821,7 +1863,7 @@ gst_base_parse_update_bitrates (GstBaseParse * parse, GstBaseParseFrame * frame)
     if (avg_bitrate > G_MAXUINT)
       return;
 
-    parse->priv->avg_bitrate = avg_bitrate;
+    parse->priv->avg_bitrate = (guint) avg_bitrate;
   } else {
     /* No way to figure out frame duration (is this even possible?) */
     return;
@@ -1872,7 +1914,7 @@ gst_base_parse_update_bitrates (GstBaseParse * parse, GstBaseParseFrame * frame)
 
     /* Only update the tag on a 2% change */
     if (parse->priv->post_avg_bitrate && parse->priv->avg_bitrate) {
-      guint64 diffprev = gst_util_uint64_scale_int (100,
+      guint64 diffprev = gst_util_uint64_scale (100,
           ABSDIFF (parse->priv->avg_bitrate, parse->priv->posted_avg_bitrate),
           parse->priv->avg_bitrate);
       if (diffprev >= UPDATE_THRESHOLD)
@@ -2445,6 +2487,7 @@ gst_base_parse_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
               && last_start > parse->segment.start
               && (!GST_CLOCK_TIME_IS_VALID (parse->segment.stop)
                   || last_start < parse->segment.stop))) {
+        GstEvent *topush;
 
         GST_DEBUG_OBJECT (parse,
             "Gap of %" G_GINT64_FORMAT " ns detected in stream " "(%"
@@ -2454,8 +2497,10 @@ gst_base_parse_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
             GST_TIME_ARGS (last_start));
 
         /* skip gap FIXME */
-        gst_pad_push_event (parse->srcpad,
-            gst_event_new_segment (&parse->segment));
+        topush = gst_event_new_segment (&parse->segment);
+        if (parse->priv->segment_seqnum != GST_SEQNUM_INVALID)
+          gst_event_set_seqnum (topush, parse->priv->segment_seqnum);
+        gst_pad_push_event (parse->srcpad, topush);
 
         parse->segment.position = last_start;
       }
@@ -3612,13 +3657,19 @@ pause:
       push_eos = TRUE;
     }
     if (push_eos) {
+      GstEvent *topush;
       if (parse->priv->estimated_duration <= 0) {
         gst_base_parse_update_duration (parse);
       }
       /* Push pending events, including SEGMENT events */
       gst_base_parse_push_pending_events (parse);
 
-      gst_pad_push_event (parse->srcpad, gst_event_new_eos ());
+      topush = gst_event_new_eos ();
+      GST_DEBUG_OBJECT (parse, "segment_seqnum:%" G_GUINT32_FORMAT,
+          parse->priv->segment_seqnum);
+      if (parse->priv->segment_seqnum != GST_SEQNUM_INVALID)
+        gst_event_set_seqnum (topush, parse->priv->segment_seqnum);
+      gst_pad_push_event (parse->srcpad, topush);
     }
     gst_object_unref (parse);
   }
@@ -3721,9 +3772,10 @@ gst_base_parse_sink_activate_mode (GstPad * pad, GstObject * parent,
   switch (mode) {
     case GST_PAD_MODE_PULL:
       if (active) {
+        GstEvent *ev = gst_event_new_segment (&parse->segment);
+        parse->priv->segment_seqnum = gst_event_get_seqnum (ev);
         parse->priv->pending_events =
-            g_list_prepend (parse->priv->pending_events,
-            gst_event_new_segment (&parse->segment));
+            g_list_prepend (parse->priv->pending_events, ev);
         result = TRUE;
       } else {
         result = gst_pad_stop_task (pad);
@@ -3818,11 +3870,11 @@ gst_base_parse_set_average_bitrate (GstBaseParse * parse, guint bitrate)
 /**
  * gst_base_parse_set_min_frame_size:
  * @parse: #GstBaseParse.
- * @min_size: Minimum size of the data that this base class should give to
- *            subclass.
+ * @min_size: Minimum size in bytes of the data that this base class should
+ *       give to subclass.
  *
  * Subclass can use this function to tell the base class that it needs to
- * give at least #min_size buffers.
+ * be given buffers of at least @min_size bytes.
  */
 void
 gst_base_parse_set_min_frame_size (GstBaseParse * parse, guint min_size)
@@ -3930,10 +3982,10 @@ gst_base_parse_set_syncable (GstBaseParse * parse, gboolean syncable)
  * Set if the nature of the format or configuration does not allow (much)
  * parsing, and the parser should operate in passthrough mode (which only
  * applies when operating in push mode). That is, incoming buffers are
- * pushed through unmodified, i.e. no @check_valid_frame or @parse_frame
- * callbacks will be invoked, but @pre_push_frame will still be invoked,
- * so subclass can perform as much or as little is appropriate for
- * passthrough semantics in @pre_push_frame.
+ * pushed through unmodified, i.e. no #GstBaseParseClass.handle_frame()
+ * will be invoked, but #GstBaseParseClass.pre_push_frame() will still be
+ * invoked, so subclass can perform as much or as little is appropriate for
+ * passthrough semantics in #GstBaseParseClass.pre_push_frame().
  */
 void
 gst_base_parse_set_passthrough (GstBaseParse * parse, gboolean passthrough)

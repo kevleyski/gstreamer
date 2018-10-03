@@ -152,9 +152,6 @@
 GST_DEBUG_CATEGORY_STATIC (gst_base_sink_debug);
 #define GST_CAT_DEFAULT gst_base_sink_debug
 
-#define GST_BASE_SINK_GET_PRIVATE(obj)  \
-   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_BASE_SINK, GstBaseSinkPrivate))
-
 #define GST_FLOW_STEP GST_FLOW_CUSTOM_ERROR
 
 typedef struct
@@ -181,6 +178,7 @@ struct _GstBaseSinkPrivate
   gboolean async_enabled;
   GstClockTimeDiff ts_offset;
   GstClockTime render_delay;
+  GstClockTime processing_deadline;
 
   /* start, stop of current buffer, stream time, used to report position */
   GstClockTime current_sstart;
@@ -290,6 +288,7 @@ struct _GstBaseSinkPrivate
 #define DEFAULT_THROTTLE_TIME       0
 #define DEFAULT_MAX_BITRATE         0
 #define DEFAULT_DROP_OUT_OF_SEGMENT TRUE
+#define DEFAULT_PROCESSING_DEADLINE (20 * GST_MSECOND)
 
 enum
 {
@@ -305,10 +304,12 @@ enum
   PROP_RENDER_DELAY,
   PROP_THROTTLE_TIME,
   PROP_MAX_BITRATE,
+  PROP_PROCESSING_DEADLINE,
   PROP_LAST
 };
 
 static GstElementClass *parent_class = NULL;
+static gint private_offset = 0;
 
 static void gst_base_sink_class_init (GstBaseSinkClass * klass);
 static void gst_base_sink_init (GstBaseSink * trans, gpointer g_class);
@@ -335,9 +336,19 @@ gst_base_sink_get_type (void)
 
     _type = g_type_register_static (GST_TYPE_ELEMENT,
         "GstBaseSink", &base_sink_info, G_TYPE_FLAG_ABSTRACT);
+
+    private_offset =
+        g_type_add_instance_private (_type, sizeof (GstBaseSinkPrivate));
+
     g_once_init_leave (&base_sink_type, _type);
   }
   return base_sink_type;
+}
+
+static inline GstBaseSinkPrivate *
+gst_base_sink_get_instance_private (GstBaseSink * self)
+{
+  return (G_STRUCT_MEMBER_P (self, private_offset));
 }
 
 static void gst_base_sink_set_property (GObject * object, guint prop_id,
@@ -407,10 +418,11 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
   gobject_class = G_OBJECT_CLASS (klass);
   gstelement_class = GST_ELEMENT_CLASS (klass);
 
+  if (private_offset != 0)
+    g_type_class_adjust_private_offset (klass, &private_offset);
+
   GST_DEBUG_CATEGORY_INIT (gst_base_sink_debug, "basesink", 0,
       "basesink element");
-
-  g_type_class_add_private (klass, sizeof (GstBaseSinkPrivate));
 
   parent_class = g_type_class_peek_parent (klass);
 
@@ -527,6 +539,20 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
           "The maximum bits per second to render (0 = disabled)", 0,
           G_MAXUINT64, DEFAULT_MAX_BITRATE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  /**
+   * GstBaseSink:processing-deadline:
+   *
+   * Maximum amount of time (in nanoseconds) that the pipeline can take
+   * for processing the buffer. This is added to the latency of live
+   * pipelines.
+   *
+   * Since: 1.16
+   */
+  g_object_class_install_property (gobject_class, PROP_PROCESSING_DEADLINE,
+      g_param_spec_uint64 ("processing-deadline", "Processing deadline",
+          "Maximum processing deadline in nanoseconds", 0, G_MAXUINT64,
+          DEFAULT_PROCESSING_DEADLINE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gstelement_class->change_state =
       GST_DEBUG_FUNCPTR (gst_base_sink_change_state);
@@ -622,7 +648,7 @@ gst_base_sink_init (GstBaseSink * basesink, gpointer g_class)
   GstPadTemplate *pad_template;
   GstBaseSinkPrivate *priv;
 
-  basesink->priv = priv = GST_BASE_SINK_GET_PRIVATE (basesink);
+  basesink->priv = priv = gst_base_sink_get_instance_private (basesink);
 
   pad_template =
       gst_element_class_get_pad_template (GST_ELEMENT_CLASS (g_class), "sink");
@@ -653,6 +679,7 @@ gst_base_sink_init (GstBaseSink * basesink, gpointer g_class)
   priv->async_enabled = DEFAULT_ASYNC;
   priv->ts_offset = DEFAULT_TS_OFFSET;
   priv->render_delay = DEFAULT_RENDER_DELAY;
+  priv->processing_deadline = DEFAULT_PROCESSING_DEADLINE;
   priv->blocksize = DEFAULT_BLOCKSIZE;
   priv->cached_clock_id = NULL;
   g_atomic_int_set (&priv->enable_last_sample, DEFAULT_ENABLE_LAST_SAMPLE);
@@ -734,14 +761,10 @@ void
 gst_base_sink_set_drop_out_of_segment (GstBaseSink * sink,
     gboolean drop_out_of_segment)
 {
-  GstBaseSinkPrivate *priv;
-
   g_return_if_fail (GST_IS_BASE_SINK (sink));
 
-  priv = GST_BASE_SINK_GET_PRIVATE (sink);
-
   GST_OBJECT_LOCK (sink);
-  priv->drop_out_of_segment = drop_out_of_segment;
+  sink->priv->drop_out_of_segment = drop_out_of_segment;
   GST_OBJECT_UNLOCK (sink);
 
 }
@@ -761,15 +784,12 @@ gst_base_sink_set_drop_out_of_segment (GstBaseSink * sink,
 gboolean
 gst_base_sink_get_drop_out_of_segment (GstBaseSink * sink)
 {
-  GstBaseSinkPrivate *priv;
   gboolean res;
 
   g_return_val_if_fail (GST_IS_BASE_SINK (sink), FALSE);
 
-  priv = GST_BASE_SINK_GET_PRIVATE (sink);
-
   GST_OBJECT_LOCK (sink);
-  res = priv->drop_out_of_segment;
+  res = sink->priv->drop_out_of_segment;
   GST_OBJECT_UNLOCK (sink);
 
   return res;
@@ -1148,7 +1168,7 @@ gst_base_sink_query_latency (GstBaseSink * sink, gboolean * live,
     GstClockTime * max_latency)
 {
   gboolean l, us_live, res, have_latency;
-  GstClockTime min, max, render_delay;
+  GstClockTime min, max, render_delay, processing_deadline;
   GstQuery *query;
   GstClockTime us_min, us_max;
 
@@ -1157,6 +1177,7 @@ gst_base_sink_query_latency (GstBaseSink * sink, gboolean * live,
   l = sink->sync;
   have_latency = sink->priv->have_latency;
   render_delay = sink->priv->render_delay;
+  processing_deadline = sink->priv->processing_deadline;
   GST_OBJECT_UNLOCK (sink);
 
   /* assume no latency */
@@ -1180,6 +1201,24 @@ gst_base_sink_query_latency (GstBaseSink * sink, gboolean * live,
          * values to create the complete latency. */
         min = us_min;
         max = us_max;
+
+        if (l) {
+          if (max == -1 || min + processing_deadline <= max)
+            min += processing_deadline;
+          else {
+            GST_ELEMENT_WARNING (sink, CORE, CLOCK,
+                (_("Pipeline construction is invalid, please add queues.")),
+                ("Not enough buffering available for "
+                    " the processing deadline of %" GST_TIME_FORMAT
+                    ", add enough queues to buffer  %" GST_TIME_FORMAT
+                    " additional data. Shortening processing latency to %"
+                    GST_TIME_FORMAT ".",
+                    GST_TIME_ARGS (processing_deadline),
+                    GST_TIME_ARGS (min + processing_deadline - max),
+                    GST_TIME_ARGS (max - min)));
+            min = max;
+          }
+        }
       }
       if (l) {
         /* we need to add the render delay if we are live */
@@ -1411,6 +1450,67 @@ gst_base_sink_get_max_bitrate (GstBaseSink * sink)
   return res;
 }
 
+/**
+ * gst_base_sink_set_processing_deadline:
+ * @sink: a #GstBaseSink
+ * @processing_deadline: the new processing deadline in nanoseconds.
+ *
+ * Maximum amount of time (in nanoseconds) that the pipeline can take
+ * for processing the buffer. This is added to the latency of live
+ * pipelines.
+ *
+ * This function is usually called by subclasses.
+ *
+ * Since: 1.16
+ */
+void
+gst_base_sink_set_processing_deadline (GstBaseSink * sink,
+    GstClockTime processing_deadline)
+{
+  GstClockTime old_processing_deadline;
+
+  g_return_if_fail (GST_IS_BASE_SINK (sink));
+
+  GST_OBJECT_LOCK (sink);
+  old_processing_deadline = sink->priv->processing_deadline;
+  sink->priv->processing_deadline = processing_deadline;
+  GST_LOG_OBJECT (sink, "set render processing_deadline to %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (processing_deadline));
+  GST_OBJECT_UNLOCK (sink);
+
+  if (processing_deadline != old_processing_deadline) {
+    GST_DEBUG_OBJECT (sink, "posting latency changed");
+    gst_element_post_message (GST_ELEMENT_CAST (sink),
+        gst_message_new_latency (GST_OBJECT_CAST (sink)));
+  }
+}
+
+/**
+ * gst_base_sink_get_processing_deadline:
+ * @sink: a #GstBaseSink
+ *
+ * Get the processing deadline of @sink. see
+ * gst_base_sink_set_processing_deadline() for more information about
+ * the processing deadline.
+ *
+ * Returns: the processing deadline
+ *
+ * Since: 1.16
+ */
+GstClockTime
+gst_base_sink_get_processing_deadline (GstBaseSink * sink)
+{
+  GstClockTimeDiff res;
+
+  g_return_val_if_fail (GST_IS_BASE_SINK (sink), 0);
+
+  GST_OBJECT_LOCK (sink);
+  res = sink->priv->processing_deadline;
+  GST_OBJECT_UNLOCK (sink);
+
+  return res;
+}
+
 static void
 gst_base_sink_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
@@ -1447,6 +1547,9 @@ gst_base_sink_set_property (GObject * object, guint prop_id,
       break;
     case PROP_MAX_BITRATE:
       gst_base_sink_set_max_bitrate (sink, g_value_get_uint64 (value));
+      break;
+    case PROP_PROCESSING_DEADLINE:
+      gst_base_sink_set_processing_deadline (sink, g_value_get_uint64 (value));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1493,6 +1596,9 @@ gst_base_sink_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_MAX_BITRATE:
       g_value_set_uint64 (value, gst_base_sink_get_max_bitrate (sink));
+      break;
+    case PROP_PROCESSING_DEADLINE:
+      g_value_set_uint64 (value, gst_base_sink_get_processing_deadline (sink));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);

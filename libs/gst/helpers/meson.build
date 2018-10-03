@@ -3,7 +3,6 @@ executable('gst-plugin-scanner',
   c_args : gst_c_args,
   include_directories : [configinc],
   dependencies : [gobject_dep, gmodule_dep, glib_dep, mathlib, gst_dep],
-  link_with : [printf_lib],
   install_dir : helpers_install_dir,
   install: true,
 )
@@ -24,20 +23,14 @@ endif
 
 # Check PTP support
 have_ptp = false
-if host_machine.system() == 'android'
+if host_system == 'android'
   message('PTP not supported on Android because of permissions.')
-elif host_machine.system() == 'windows'
+elif host_system == 'windows'
   message('PTP not supported on Windows, not ported yet.')
-elif host_machine.system() == 'ios' # FIXME: is it also darwing on iOS ?
+elif host_system == 'ios'
   message('PTP not supported on iOS because of permissions.')
-elif host_machine.system() == 'darwin'
-  if cc.has_header('MobileCoreServices/MobileCoreServices.h')
-    message('PTP not supported on iOS because of permissions.')
-  else
-    have_ptp = true
-  endif
-elif ['linux', 'netbsd', 'freebsd', 'openbsd', 'kfreebsd', 'dragonfly', 'solaris'].contains(host_machine.system())
-  message('PTP supported on ' + host_machine.system() + '.')
+elif ['linux', 'darwin', 'netbsd', 'freebsd', 'openbsd', 'kfreebsd', 'dragonfly', 'solaris'].contains(host_system)
+  message('PTP supported on ' + host_system + '.')
   have_ptp = true
 endif
 
@@ -124,7 +117,6 @@ if have_ptp
     c_args : gst_c_args,
     include_directories : [configinc, libsinc],
     dependencies : [gio_dep, gobject_dep, glib_dep, mathlib, gst_dep, cap_dep],
-    link_with : [printf_lib],
     install_dir : helpers_install_dir,
     install : true)
 

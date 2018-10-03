@@ -1820,6 +1820,9 @@ gst_mini_object_unlock
 gst_mini_object_is_writable
 gst_mini_object_make_writable
 
+gst_mini_object_add_parent
+gst_mini_object_remove_parent
+
 gst_mini_object_copy
 
 gst_mini_object_set_qdata
@@ -2497,7 +2500,6 @@ gst_preset_get_type
 <SECTION>
 <FILE>gstprotection</FILE>
 <TITLE>GstProtectionMeta</TITLE>
-<INCLUDE>gst/gstprotection.h</INCLUDE>
 GstProtectionMeta
 gst_buffer_add_protection_meta
 gst_buffer_get_protection_meta

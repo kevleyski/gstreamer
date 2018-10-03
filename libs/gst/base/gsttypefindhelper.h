@@ -37,10 +37,25 @@ GstCaps * gst_type_find_helper_for_data   (GstObject              *obj,
                                            const guint8           *data,
                                            gsize                   size,
                                            GstTypeFindProbability *prob);
+
+GST_BASE_API
+GstCaps * gst_type_find_helper_for_data_with_extension (GstObject              *obj,
+                                                        const guint8           *data,
+                                                        gsize                   size,
+                                                        const gchar            *extension,
+                                                        GstTypeFindProbability *prob);
+
 GST_BASE_API
 GstCaps * gst_type_find_helper_for_buffer (GstObject              *obj,
                                            GstBuffer              *buf,
                                            GstTypeFindProbability *prob);
+
+GST_BASE_API
+GstCaps * gst_type_find_helper_for_buffer_with_extension (GstObject              *obj,
+                                                          GstBuffer              *buf,
+                                                          const gchar            *extension,
+                                                          GstTypeFindProbability *prob);
+
 GST_BASE_API
 GstCaps * gst_type_find_helper_for_extension (GstObject * obj,
                                               const gchar * extension);
@@ -75,6 +90,15 @@ GstCaps * gst_type_find_helper_get_range (GstObject                         *obj
                                           guint64                            size,
                                           const gchar                       *extension,
                                           GstTypeFindProbability            *prob);
+
+GST_BASE_API
+GstFlowReturn gst_type_find_helper_get_range_full (GstObject                         *obj,
+                                                   GstObject                         *parent,
+                                                   GstTypeFindHelperGetRangeFunction  func,
+                                                   guint64                            size,
+                                                   const gchar                       *extension,
+                                                   GstCaps                          **caps,
+                                                   GstTypeFindProbability            *prob);
 
 G_END_DECLS
 

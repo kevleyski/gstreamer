@@ -228,6 +228,9 @@ _gst_event_free (GstEvent * event)
     gst_structure_set_parent_refcount (s, NULL);
     gst_structure_free (s);
   }
+#ifdef USE_POISONING
+  memset (event, 0xff, sizeof (GstEventImpl));
+#endif
 
   g_slice_free1 (sizeof (GstEventImpl), event);
 }
@@ -448,6 +451,8 @@ void
 gst_event_set_seqnum (GstEvent * event, guint32 seqnum)
 {
   g_return_if_fail (GST_IS_EVENT (event));
+  g_return_if_fail (seqnum != GST_SEQNUM_INVALID);
+  g_return_if_fail (gst_event_is_writable (event));
 
   GST_EVENT_SEQNUM (event) = seqnum;
 }
@@ -496,6 +501,7 @@ void
 gst_event_set_running_time_offset (GstEvent * event, gint64 offset)
 {
   g_return_if_fail (GST_IS_EVENT (event));
+  g_return_if_fail (gst_event_is_writable (event));
 
   ((GstEventImpl *) event)->running_time_offset = offset;
 }
@@ -1264,6 +1270,18 @@ gst_event_new_seek (gdouble rate, GstFormat format, GstSeekFlags flags,
   GstStructure *structure;
 
   g_return_val_if_fail (rate != 0.0, NULL);
+
+  /* SNAP flags only make sense in combination with the KEYUNIT flag. Warn
+   * and unset the SNAP flags if they're set without the KEYUNIT flag */
+  if (!(flags & GST_SEEK_FLAG_KEY_UNIT) &&
+      (flags & (GST_SEEK_FLAG_SNAP_BEFORE | GST_SEEK_FLAG_SNAP_AFTER |
+              GST_SEEK_FLAG_SNAP_NEAREST))) {
+    g_warning ("SNAP seeks only work in combination with the KEY_UNIT "
+        "flag, ignoring SNAP flags");
+    flags &=
+        ~(GST_SEEK_FLAG_SNAP_BEFORE | GST_SEEK_FLAG_SNAP_AFTER |
+        GST_SEEK_FLAG_SNAP_NEAREST);
+  }
 
   if (format == GST_FORMAT_TIME) {
     GST_CAT_INFO (GST_CAT_EVENT,

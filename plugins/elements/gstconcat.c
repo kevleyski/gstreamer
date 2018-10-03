@@ -324,6 +324,8 @@ gst_concat_request_new_pad (GstElement * element, GstPadTemplate * templ,
   if (do_notify)
     gst_concat_notify_active_pad (self);
 
+  GST_DEBUG_OBJECT (sinkpad, "requested pad");
+
   return sinkpad;
 }
 
@@ -337,7 +339,7 @@ gst_concat_release_pad (GstElement * element, GstPad * pad)
   gboolean eos = FALSE;
   gboolean do_notify = FALSE;
 
-  GST_DEBUG_OBJECT (self, "releasing pad");
+  GST_DEBUG_OBJECT (pad, "releasing pad");
 
   g_mutex_lock (&self->lock);
   spad->flushing = TRUE;
@@ -569,6 +571,7 @@ gst_concat_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
         ret = FALSE;
       } else {
         GstSegment segment = spad->segment;
+        GstEvent *topush;
 
         if (adjust_base) {
           /* We know no duration */
@@ -584,8 +587,10 @@ gst_concat_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
               segment.stop += self->current_start_offset;
           }
         }
+        topush = gst_event_new_segment (&segment);
+        gst_event_set_seqnum (topush, gst_event_get_seqnum (event));
 
-        gst_pad_push_event (self->srcpad, gst_event_new_segment (&segment));
+        gst_pad_push_event (self->srcpad, topush);
       }
       break;
     }

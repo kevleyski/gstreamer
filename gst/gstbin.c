@@ -144,9 +144,6 @@ GST_DEBUG_CATEGORY_STATIC (bin_debug);
  * a toplevel bin */
 #define BIN_IS_TOPLEVEL(bin) ((GST_OBJECT_PARENT (bin) == NULL) || bin->priv->asynchandling)
 
-#define GST_BIN_GET_PRIVATE(obj)  \
-   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_BIN, GstBinPrivate))
-
 struct _GstBinPrivate
 {
   gboolean asynchandling;
@@ -272,7 +269,9 @@ static guint gst_bin_signals[LAST_SIGNAL] = { 0 };
 }
 
 #define gst_bin_parent_class parent_class
-G_DEFINE_TYPE_WITH_CODE (GstBin, gst_bin, GST_TYPE_ELEMENT, _do_init);
+G_DEFINE_TYPE_WITH_CODE (GstBin, gst_bin, GST_TYPE_ELEMENT,
+    G_ADD_PRIVATE (GstBin)
+    _do_init);
 
 static GObject *
 gst_bin_child_proxy_get_child_by_index (GstChildProxy * child_proxy,
@@ -339,8 +338,6 @@ gst_bin_class_init (GstBinClass * klass)
 
   gobject_class = (GObjectClass *) klass;
   gstelement_class = (GstElementClass *) klass;
-
-  g_type_class_add_private (klass, sizeof (GstBinPrivate));
 
   gobject_class->set_property = gst_bin_set_property;
   gobject_class->get_property = gst_bin_get_property;
@@ -503,7 +500,7 @@ gst_bin_init (GstBin * bin)
   gst_bus_set_sync_handler (bus, (GstBusSyncHandler) bin_bus_handler, bin,
       NULL);
 
-  bin->priv = GST_BIN_GET_PRIVATE (bin);
+  bin->priv = gst_bin_get_instance_private (bin);
   bin->priv->asynchandling = DEFAULT_ASYNC_HANDLING;
   bin->priv->structure_cookie = 0;
   bin->priv->message_forward = DEFAULT_MESSAGE_FORWARD;
@@ -1304,12 +1301,14 @@ no_state_recalc:
     s = (GstStructure *) gst_message_get_structure (msg);
     gst_structure_get (s, "bin.old.context", GST_TYPE_CONTEXT, &context, NULL);
     gst_structure_remove_field (s, "bin.old.context");
-    gst_element_post_message (GST_ELEMENT_CAST (bin), msg);
+    /* Keep the msg around while we still need access to the context_type */
+    gst_element_post_message (GST_ELEMENT_CAST (bin), gst_message_ref (msg));
 
     /* lock to avoid losing a potential write */
     GST_OBJECT_LOCK (bin);
     replacement =
         gst_element_get_context_unlocked (GST_ELEMENT_CAST (bin), context_type);
+    gst_message_unref (msg);
 
     if (replacement) {
       /* we got the context set from GstElement::set_context */
@@ -3513,7 +3512,7 @@ nothing_pending:
 static void
 bin_do_eos (GstBin * bin)
 {
-  guint32 seqnum = 0;
+  guint32 seqnum = GST_SEQNUM_INVALID;
   gboolean eos;
 
   GST_OBJECT_LOCK (bin);
@@ -3542,7 +3541,8 @@ bin_do_eos (GstBin * bin)
     GST_OBJECT_UNLOCK (bin);
 
     tmessage = gst_message_new_eos (GST_OBJECT_CAST (bin));
-    gst_message_set_seqnum (tmessage, seqnum);
+    if (seqnum != GST_SEQNUM_INVALID)
+      gst_message_set_seqnum (tmessage, seqnum);
     GST_DEBUG_OBJECT (bin,
         "all sinks posted EOS, posting seqnum #%" G_GUINT32_FORMAT, seqnum);
     gst_element_post_message (GST_ELEMENT_CAST (bin), tmessage);
@@ -3555,7 +3555,7 @@ bin_do_eos (GstBin * bin)
 static void
 bin_do_stream_start (GstBin * bin)
 {
-  guint32 seqnum = 0;
+  guint32 seqnum = GST_SEQNUM_INVALID;
   gboolean stream_start;
   gboolean have_group_id = FALSE;
   guint group_id = 0;
@@ -3575,7 +3575,8 @@ bin_do_stream_start (GstBin * bin)
     GST_OBJECT_UNLOCK (bin);
 
     tmessage = gst_message_new_stream_start (GST_OBJECT_CAST (bin));
-    gst_message_set_seqnum (tmessage, seqnum);
+    if (seqnum != GST_SEQNUM_INVALID)
+      gst_message_set_seqnum (tmessage, seqnum);
     if (have_group_id)
       gst_message_set_group_id (tmessage, group_id);
 

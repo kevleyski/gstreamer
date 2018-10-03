@@ -300,6 +300,7 @@ gst_aggregator_pad_flush (GstAggregatorPad * aggpad, GstAggregator * agg)
  * GstAggregator implementation  *
  *************************************/
 static GstElementClass *aggregator_parent_class = NULL;
+static gint aggregator_private_offset = 0;
 
 /* All members are protected by the object lock unless otherwise noted */
 
@@ -331,6 +332,8 @@ struct _GstAggregatorPrivate
 
   GstClockTime sub_latency_min; /* protected by src_lock */
   GstClockTime sub_latency_max; /* protected by src_lock */
+
+  GstClockTime upstream_latency_min;    /* protected by src_lock */
 
   /* aggregate */
   GstClockID aggregate_id;      /* protected by src_lock */
@@ -365,6 +368,7 @@ typedef struct
 } EventData;
 
 #define DEFAULT_LATENCY              0
+#define DEFAULT_MIN_UPSTREAM_LATENCY              0
 #define DEFAULT_START_TIME_SELECTION GST_AGGREGATOR_START_TIME_SELECTION_ZERO
 #define DEFAULT_START_TIME           (-1)
 
@@ -372,6 +376,7 @@ enum
 {
   PROP_0,
   PROP_LATENCY,
+  PROP_MIN_UPSTREAM_LATENCY,
   PROP_START_TIME_SELECTION,
   PROP_START_TIME,
   PROP_LAST
@@ -717,6 +722,12 @@ gst_aggregator_wait_and_check (GstAggregator * self, gboolean * timeout)
   return res;
 }
 
+typedef struct
+{
+  gboolean processed_event;
+  GstFlowReturn flow_ret;
+} DoHandleEventsAndQueriesData;
+
 static gboolean
 gst_aggregator_do_events_and_queries (GstElement * self, GstPad * epad,
     gpointer user_data)
@@ -726,7 +737,7 @@ gst_aggregator_do_events_and_queries (GstElement * self, GstPad * epad,
   GstEvent *event = NULL;
   GstQuery *query = NULL;
   GstAggregatorClass *klass = NULL;
-  gboolean *processed_event = user_data;
+  DoHandleEventsAndQueriesData *data = user_data;
 
   do {
     event = NULL;
@@ -744,8 +755,7 @@ gst_aggregator_do_events_and_queries (GstElement * self, GstPad * epad,
     if (event || query) {
       gboolean ret;
 
-      if (processed_event)
-        *processed_event = TRUE;
+      data->processed_event = TRUE;
       if (klass == NULL)
         klass = GST_AGGREGATOR_GET_CLASS (self);
 
@@ -755,8 +765,11 @@ gst_aggregator_do_events_and_queries (GstElement * self, GstPad * epad,
         ret = klass->sink_event (aggregator, pad, event);
 
         PAD_LOCK (pad);
-        if (GST_EVENT_TYPE (event) == GST_EVENT_CAPS)
+        if (GST_EVENT_TYPE (event) == GST_EVENT_CAPS) {
           pad->priv->negotiated = ret;
+          if (!ret)
+            pad->priv->flow_return = data->flow_ret = GST_FLOW_NOT_NEGOTIATED;
+        }
         if (g_queue_peek_tail (&pad->priv->data) == event)
           gst_event_unref (g_queue_pop_tail (&pad->priv->data));
         gst_event_unref (event);
@@ -1096,10 +1109,13 @@ gst_aggregator_aggregate_func (GstAggregator * self)
   GST_LOG_OBJECT (self, "Checking aggregate");
   while (priv->send_eos && priv->running) {
     GstFlowReturn flow_return = GST_FLOW_OK;
-    gboolean processed_event = FALSE;
+    DoHandleEventsAndQueriesData events_query_data = { FALSE, GST_FLOW_OK };
 
     gst_element_foreach_sink_pad (GST_ELEMENT_CAST (self),
-        gst_aggregator_do_events_and_queries, NULL);
+        gst_aggregator_do_events_and_queries, &events_query_data);
+
+    if ((flow_return = events_query_data.flow_ret) != GST_FLOW_OK)
+      goto handle_error;
 
     if (self->priv->peer_latency_live)
       gst_element_foreach_sink_pad (GST_ELEMENT_CAST (self),
@@ -1110,10 +1126,15 @@ gst_aggregator_aggregate_func (GstAggregator * self)
     if (!gst_aggregator_wait_and_check (self, &timeout))
       continue;
 
+    events_query_data.processed_event = FALSE;
+    events_query_data.flow_ret = GST_FLOW_OK;
     gst_element_foreach_sink_pad (GST_ELEMENT_CAST (self),
-        gst_aggregator_do_events_and_queries, &processed_event);
+        gst_aggregator_do_events_and_queries, &events_query_data);
 
-    if (processed_event)
+    if ((flow_return = events_query_data.flow_ret) != GST_FLOW_OK)
+      goto handle_error;
+
+    if (events_query_data.processed_event)
       continue;
 
     if (gst_pad_check_reconfigure (GST_AGGREGATOR_SRC_PAD (self))) {
@@ -1143,6 +1164,7 @@ gst_aggregator_aggregate_func (GstAggregator * self)
       gst_aggregator_push_eos (self);
     }
 
+  handle_error:
     GST_LOG_OBJECT (self, "flow return is %s", gst_flow_get_name (flow_return));
 
     if (flow_return != GST_FLOW_OK) {
@@ -1724,6 +1746,16 @@ gst_aggregator_query_latency_unlocked (GstAggregator * self, GstQuery * query)
     return FALSE;
   }
 
+  if (self->priv->upstream_latency_min > min) {
+    GstClockTimeDiff diff =
+        GST_CLOCK_DIFF (min, self->priv->upstream_latency_min);
+
+    min += diff;
+    if (GST_CLOCK_TIME_IS_VALID (max)) {
+      max += diff;
+    }
+  }
+
   if (min > max && GST_CLOCK_TIME_IS_VALID (max)) {
     GST_ELEMENT_WARNING (self, CORE, CLOCK, (NULL),
         ("Impossible to configure latency: max %" GST_TIME_FORMAT " < min %"
@@ -1895,7 +1927,6 @@ gst_aggregator_event_forward_func (GstPad * pad, gpointer user_data)
     } else {
       ret = gst_pad_send_event (peer, gst_event_ref (evdata->event));
       GST_DEBUG_OBJECT (pad, "return of event push is %d", ret);
-      gst_object_unref (peer);
     }
   }
 
@@ -1934,6 +1965,9 @@ gst_aggregator_event_forward_func (GstPad * pad, gpointer user_data)
   }
 
   evdata->result &= ret;
+
+  if (peer)
+    gst_object_unref (peer);
 
   /* Always send to all pads */
   return FALSE;
@@ -2245,6 +2279,11 @@ gst_aggregator_set_property (GObject * object, guint prop_id,
     case PROP_LATENCY:
       gst_aggregator_set_latency_property (agg, g_value_get_uint64 (value));
       break;
+    case PROP_MIN_UPSTREAM_LATENCY:
+      SRC_LOCK (agg);
+      agg->priv->upstream_latency_min = g_value_get_uint64 (value);
+      SRC_UNLOCK (agg);
+      break;
     case PROP_START_TIME_SELECTION:
       agg->priv->start_time_selection = g_value_get_enum (value);
       break;
@@ -2267,6 +2306,11 @@ gst_aggregator_get_property (GObject * object, guint prop_id,
     case PROP_LATENCY:
       g_value_set_uint64 (value, gst_aggregator_get_latency_property (agg));
       break;
+    case PROP_MIN_UPSTREAM_LATENCY:
+      SRC_LOCK (agg);
+      g_value_set_uint64 (value, agg->priv->upstream_latency_min);
+      SRC_UNLOCK (agg);
+      break;
     case PROP_START_TIME_SELECTION:
       g_value_set_enum (value, agg->priv->start_time_selection);
       break;
@@ -2287,10 +2331,12 @@ gst_aggregator_class_init (GstAggregatorClass * klass)
   GstElementClass *gstelement_class = (GstElementClass *) klass;
 
   aggregator_parent_class = g_type_class_peek_parent (klass);
-  g_type_class_add_private (klass, sizeof (GstAggregatorPrivate));
 
   GST_DEBUG_CATEGORY_INIT (aggregator_debug, "aggregator",
       GST_DEBUG_FG_MAGENTA, "GstAggregator");
+
+  if (aggregator_private_offset != 0)
+    g_type_class_adjust_private_offset (klass, &aggregator_private_offset);
 
   klass->finish_buffer = gst_aggregator_default_finish_buffer;
 
@@ -2324,6 +2370,21 @@ gst_aggregator_class_init (GstAggregatorClass * klass)
           "position (in nanoseconds)", 0, G_MAXUINT64,
           DEFAULT_LATENCY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * GstAggregator:min-upstream-latency:
+   *
+   * Since: 1.16
+   */
+  g_object_class_install_property (gobject_class, PROP_MIN_UPSTREAM_LATENCY,
+      g_param_spec_uint64 ("min-upstream-latency", "Buffer latency",
+          "When sources with a higher latency are expected to be plugged "
+          "in dynamically after the aggregator has started playing, "
+          "this allows overriding the minimum latency reported by the "
+          "initial source(s). This is only taken into account when superior "
+          "to the reported minimum latency.",
+          0, G_MAXUINT64,
+          DEFAULT_LATENCY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class, PROP_START_TIME_SELECTION,
       g_param_spec_enum ("start-time-selection", "Start Time Selection",
           "Decides which start time is output",
@@ -2338,6 +2399,12 @@ gst_aggregator_class_init (GstAggregatorClass * klass)
           DEFAULT_START_TIME, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
+static inline gpointer
+gst_aggregator_get_instance_private (GstAggregator * self)
+{
+  return (G_STRUCT_MEMBER_P (self, aggregator_private_offset));
+}
+
 static void
 gst_aggregator_init (GstAggregator * self, GstAggregatorClass * klass)
 {
@@ -2346,9 +2413,7 @@ gst_aggregator_init (GstAggregator * self, GstAggregatorClass * klass)
 
   g_return_if_fail (klass->aggregate != NULL);
 
-  self->priv =
-      G_TYPE_INSTANCE_GET_PRIVATE (self, GST_TYPE_AGGREGATOR,
-      GstAggregatorPrivate);
+  self->priv = gst_aggregator_get_instance_private (self);
 
   priv = self->priv;
 
@@ -2377,6 +2442,7 @@ gst_aggregator_init (GstAggregator * self, GstAggregatorClass * klass)
 
   gst_element_add_pad (GST_ELEMENT (self), self->srcpad);
 
+  self->priv->upstream_latency_min = DEFAULT_MIN_UPSTREAM_LATENCY;
   self->priv->latency = DEFAULT_LATENCY;
   self->priv->start_time_selection = DEFAULT_START_TIME_SELECTION;
   self->priv->start_time = DEFAULT_START_TIME;
@@ -2408,6 +2474,10 @@ gst_aggregator_get_type (void)
 
     _type = g_type_register_static (GST_TYPE_ELEMENT,
         "GstAggregator", &info, G_TYPE_FLAG_ABSTRACT);
+
+    aggregator_private_offset =
+        g_type_add_instance_private (_type, sizeof (GstAggregatorPrivate));
+
     g_once_init_leave (&type, _type);
   }
   return type;
@@ -2741,7 +2811,7 @@ gst_aggregator_pad_activate_mode_func (GstPad * pad,
 /***********************************
  * GstAggregatorPad implementation  *
  ************************************/
-G_DEFINE_TYPE (GstAggregatorPad, gst_aggregator_pad, GST_TYPE_PAD);
+G_DEFINE_TYPE_WITH_PRIVATE (GstAggregatorPad, gst_aggregator_pad, GST_TYPE_PAD);
 
 static void
 gst_aggregator_pad_constructed (GObject * object)
@@ -2787,8 +2857,6 @@ gst_aggregator_pad_class_init (GstAggregatorPadClass * klass)
 {
   GObjectClass *gobject_class = (GObjectClass *) klass;
 
-  g_type_class_add_private (klass, sizeof (GstAggregatorPadPrivate));
-
   gobject_class->constructed = gst_aggregator_pad_constructed;
   gobject_class->finalize = gst_aggregator_pad_finalize;
   gobject_class->dispose = gst_aggregator_pad_dispose;
@@ -2797,9 +2865,7 @@ gst_aggregator_pad_class_init (GstAggregatorPadClass * klass)
 static void
 gst_aggregator_pad_init (GstAggregatorPad * pad)
 {
-  pad->priv =
-      G_TYPE_INSTANCE_GET_PRIVATE (pad, GST_TYPE_AGGREGATOR_PAD,
-      GstAggregatorPadPrivate);
+  pad->priv = gst_aggregator_pad_get_instance_private (pad);
 
   g_queue_init (&pad->priv->data);
   g_cond_init (&pad->priv->event_cond);
@@ -2881,6 +2947,11 @@ gst_aggregator_pad_pop_buffer (GstAggregatorPad * pad)
 
   PAD_LOCK (pad);
 
+  if (pad->priv->flow_return != GST_FLOW_OK) {
+    PAD_UNLOCK (pad);
+    return NULL;
+  }
+
   gst_aggregator_pad_clip_buffer_unlocked (pad);
 
   buffer = pad->priv->clipped_buffer;
@@ -2932,6 +3003,11 @@ gst_aggregator_pad_peek_buffer (GstAggregatorPad * pad)
   GstBuffer *buffer;
 
   PAD_LOCK (pad);
+
+  if (pad->priv->flow_return != GST_FLOW_OK) {
+    PAD_UNLOCK (pad);
+    return NULL;
+  }
 
   gst_aggregator_pad_clip_buffer_unlocked (pad);
 

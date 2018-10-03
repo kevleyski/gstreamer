@@ -155,8 +155,18 @@
 # endif
 #endif
 
+#if defined(_MSC_VER) && !defined(GST_STATIC_COMPILATION)
+# define GST_API_IMPORT __declspec(dllimport) extern
+#else
+# define GST_API_IMPORT extern
+#endif
+
 #ifndef GST_API
-#define GST_API GST_EXPORT
+# ifdef BUILDING_GST
+#  define GST_API GST_API_EXPORT        /* from config.h */
+# else
+#  define GST_API GST_API_IMPORT
+# endif
 #endif
 
 /* These macros are used to mark deprecated functions in GStreamer headers,

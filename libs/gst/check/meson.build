@@ -23,7 +23,7 @@ check_cdata.set('ENABLE_SUBUNIT', 0)
 check_cdata.set('CHECK_MAJOR_VERSION', 0)
 check_cdata.set('CHECK_MINOR_VERSION', 9)
 check_cdata.set('CHECK_MICRO_VERSION', 14)
-if host_machine.system() != 'windows'
+if host_system != 'windows'
   check_cdata.set('HAVE_FORK', 1)
 else
   check_cdata.set('HAVE_FORK', 0)
@@ -34,14 +34,15 @@ subdir('libcheck')
 configure_file(input : 'libcheck/check.h.in',
   output : 'internal-check.h',
   install : true,
-  install_dir : 'include/gstreamer-1.0/gst/check/',
+  install_dir : join_paths(get_option('includedir'), 'gstreamer-1.0/gst/check'),
   configuration : check_cdata)
 
-gst_check = shared_library('gstcheck-@0@'.format(apiversion),
+gst_check = library('gstcheck-@0@'.format(apiversion),
   gst_check_sources,
-  c_args : gst_c_args + ['-DGST_EXPORTS'],
+  c_args : gst_c_args + ['-UG_DISABLE_ASSERT', '-DBUILDING_GST_CHECK'],
   version : libversion,
   soversion : soversion,
+  darwin_versions : osxversion,
   install : true,
   include_directories : [configinc, libsinc],
   link_with : [libcheck],

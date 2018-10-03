@@ -930,6 +930,7 @@ gst_type_find_element_chain_do_typefinding (GstTypeFindElement * typefind,
   gsize avail;
   const guint8 *data;
   gboolean have_min, have_max;
+  gchar *ext;
 
   GST_OBJECT_LOCK (typefind);
   if (typefind->force_caps) {
@@ -951,11 +952,13 @@ gst_type_find_element_chain_do_typefinding (GstTypeFindElement * typefind,
     if (!have_min)
       goto not_enough_data;
 
+    ext = gst_type_find_get_extension (typefind, typefind->sink);
     /* map all available data */
     data = gst_adapter_map (typefind->adapter, avail);
-    caps = gst_type_find_helper_for_data (GST_OBJECT (typefind),
-        data, avail, &probability);
+    caps = gst_type_find_helper_for_data_with_extension (GST_OBJECT (typefind),
+        data, avail, ext, &probability);
     gst_adapter_unmap (typefind->adapter);
+    g_free (ext);
 
     if (caps == NULL && have_max)
       goto no_type_found;
@@ -1136,16 +1139,19 @@ gst_type_find_element_loop (GstPad * pad)
         }
         ext = gst_type_find_get_extension (typefind, pad);
 
-        found_caps =
-            gst_type_find_helper_get_range (GST_OBJECT_CAST (peer),
+        ret =
+            gst_type_find_helper_get_range_full (GST_OBJECT_CAST (peer),
             GST_OBJECT_PARENT (peer),
             (GstTypeFindHelperGetRangeFunction) (GST_PAD_GETRANGEFUNC (peer)),
-            (guint64) size, ext, &probability);
+            (guint64) size, ext, &found_caps, &probability);
         g_free (ext);
 
         GST_DEBUG ("Found caps %" GST_PTR_FORMAT, found_caps);
 
         gst_object_unref (peer);
+
+        if (ret != GST_FLOW_OK)
+          goto pause;
       }
     }
 
