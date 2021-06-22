@@ -55,7 +55,7 @@ struct _GstDeviceProviderPrivate
 
   GMutex start_lock;
 
-  gboolean started_count;
+  gint started_count;
 
   GList *hidden_providers;
 };
@@ -84,7 +84,7 @@ static gint private_offset = 0;
 GType
 gst_device_provider_get_type (void)
 {
-  static volatile gsize gst_device_provider_type = 0;
+  static gsize gst_device_provider_type = 0;
 
   if (g_once_init_enter (&gst_device_provider_type)) {
     GType _type;
@@ -151,13 +151,11 @@ gst_device_provider_class_init (GstDeviceProviderClass * klass)
 
   gst_device_provider_signals[PROVIDER_HIDDEN] =
       g_signal_new ("provider-hidden", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_FIRST, 0, NULL,
-      NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
+      G_SIGNAL_RUN_FIRST, 0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING);
 
   gst_device_provider_signals[PROVIDER_UNHIDDEN] =
       g_signal_new ("provider-unhidden", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_FIRST, 0, NULL,
-      NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
+      G_SIGNAL_RUN_FIRST, 0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING);
 }
 
 static void
@@ -166,6 +164,8 @@ gst_device_provider_init (GstDeviceProvider * provider)
   provider->priv = gst_device_provider_get_instance_private (provider);
 
   g_mutex_init (&provider->priv->start_lock);
+
+  provider->priv->started_count = 0;
 
   provider->priv->bus = gst_bus_new ();
   gst_bus_set_flushing (provider->priv->bus, TRUE);
@@ -391,6 +391,9 @@ gst_device_provider_get_metadata (GstDeviceProvider * provider,
  * Gets a list of devices that this provider understands. This may actually
  * probe the hardware if the provider is not currently started.
  *
+ * If the provider has been started, this will returned the same #GstDevice
+ * objedcts that have been returned by the #GST_MESSAGE_DEVICE_ADDED messages.
+ *
  * Returns: (transfer full) (element-type GstDevice): a #GList of
  *   #GstDevice
  *
@@ -416,8 +419,14 @@ gst_device_provider_get_devices (GstDeviceProvider * provider)
     for (item = provider->devices; item; item = item->next)
       devices = g_list_prepend (devices, gst_object_ref (item->data));
     GST_OBJECT_UNLOCK (provider);
-  } else if (klass->probe)
+  } else if (klass->probe) {
+
     devices = klass->probe (provider);
+
+    for (item = devices; item; item = item->next)
+      if (g_object_is_floating (item->data))
+        g_object_ref_sink (item->data);
+  }
 
   g_mutex_unlock (&provider->priv->start_lock);
 
@@ -437,6 +446,10 @@ gst_device_provider_get_devices (GstDeviceProvider * provider)
  * user of the object, gst_device_provider_stop() needs to be called the same
  * number of times.
  *
+ * After this function has been called, gst_device_provider_get_devices() will
+ * return the same objects that have been received from the
+ * #GST_MESSAGE_DEVICE_ADDED messages and will no longer probe.
+ *
  * Returns: %TRUE if the device providering could be started
  *
  * Since: 1.4
@@ -454,16 +467,39 @@ gst_device_provider_start (GstDeviceProvider * provider)
   g_mutex_lock (&provider->priv->start_lock);
 
   if (provider->priv->started_count > 0) {
+    provider->priv->started_count++;
     ret = TRUE;
     goto started;
   }
 
-  if (klass->start)
+  gst_bus_set_flushing (provider->priv->bus, FALSE);
+
+  if (klass->start) {
     ret = klass->start (provider);
+  } else {
+    GList *devices = NULL, *item;
+
+    devices = klass->probe (provider);
+
+    for (item = devices; item; item = item->next) {
+      GstDevice *device = GST_DEVICE (item->data);
+      gboolean was_floating = g_object_is_floating (item->data);
+
+      gst_device_provider_device_add (provider, device);
+
+      if (!was_floating)
+        g_object_unref (item->data);
+    }
+
+    g_list_free (devices);
+
+    ret = TRUE;
+  }
 
   if (ret) {
     provider->priv->started_count++;
-    gst_bus_set_flushing (provider->priv->bus, FALSE);
+  } else if (provider->priv->started_count == 0) {
+    gst_bus_set_flushing (provider->priv->bus, TRUE);
   }
 
 started:
@@ -512,14 +548,13 @@ gst_device_provider_stop (GstDeviceProvider * provider)
   g_mutex_unlock (&provider->priv->start_lock);
 }
 
-
 /**
  * gst_device_provider_get_factory:
  * @provider: a #GstDeviceProvider to request the device provider factory of.
  *
  * Retrieves the factory that was used to create this device provider.
  *
- * Returns: (transfer none): the #GstDeviceProviderFactory used for
+ * Returns: (transfer none) (nullable): the #GstDeviceProviderFactory used for
  *     creating this device provider. no refcounting is needed.
  *
  * Since: 1.4
@@ -770,4 +805,75 @@ gst_device_provider_unhide_provider (GstDeviceProvider * provider,
         gst_device_provider_signals[PROVIDER_UNHIDDEN], 0, unhidden_name);
     g_free (unhidden_name);
   }
+}
+
+/**
+ * gst_device_provider_device_changed:
+ * @device: (transfer none): the new version of @changed_device
+ * @changed_device: (transfer floating): the old version of the device that has been updated
+ *
+ * This function is used when @changed_device was modified into its new form
+ * @device. This will post a `DEVICE_CHANGED` message on the bus to let
+ * the application know that the device was modified. #GstDevice is immutable
+ * for MT. safety purposes so this is an "atomic" way of letting the application
+ * know when a device was modified.
+ *
+ * Since: 1.16
+ */
+void
+gst_device_provider_device_changed (GstDeviceProvider * provider,
+    GstDevice * device, GstDevice * changed_device)
+{
+  GList *dev_lst;
+  GstMessage *message;
+
+  g_return_if_fail (GST_IS_DEVICE_PROVIDER (provider));
+  g_return_if_fail (GST_IS_DEVICE (device));
+  g_return_if_fail (GST_IS_DEVICE (changed_device));
+
+  GST_OBJECT_LOCK (provider);
+  dev_lst = g_list_find (provider->devices, changed_device);
+  if (!dev_lst) {
+    GST_ERROR_OBJECT (provider,
+        "Trying to update a device we do not have in our own list!");
+
+    GST_OBJECT_UNLOCK (provider);
+    return;
+  }
+
+  if (!gst_object_set_parent (GST_OBJECT (device), GST_OBJECT (provider))) {
+    GST_OBJECT_UNLOCK (provider);
+    GST_WARNING_OBJECT (provider, "Could not parent device %p to provider,"
+        " it already has a parent", device);
+    return;
+  }
+  dev_lst->data = device;
+  GST_OBJECT_UNLOCK (provider);
+
+  message =
+      gst_message_new_device_changed (GST_OBJECT (provider), device,
+      changed_device);
+  gst_bus_post (provider->priv->bus, message);
+  gst_object_unparent (GST_OBJECT (changed_device));
+}
+
+/**
+ * gst_device_provider_is_started:
+ * @provider: a #GstDeviceProvider
+ *
+ * This function can be used to know if the @provider was successfully started.
+ *
+ * Since: 1.20
+ */
+gboolean
+gst_device_provider_is_started (GstDeviceProvider * provider)
+{
+  gboolean started = FALSE;
+
+  g_return_val_if_fail (GST_IS_DEVICE_PROVIDER (provider), FALSE);
+
+  g_mutex_lock (&provider->priv->start_lock);
+  started = provider->priv->started_count > 0;
+  g_mutex_unlock (&provider->priv->start_lock);
+  return started;
 }

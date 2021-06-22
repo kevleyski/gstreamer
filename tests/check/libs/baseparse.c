@@ -24,6 +24,7 @@
 #endif
 #include <gst/gst.h>
 #include <gst/check/gstcheck.h>
+#include <gst/check/gstharness.h>
 #include <gst/base/gstbaseparse.h>
 
 static GstPad *mysrcpad, *mysinkpad;
@@ -34,6 +35,10 @@ static gboolean have_eos = FALSE;
 static gboolean have_data = FALSE;
 static gint buffer_count = 0;
 static gboolean caps_set = FALSE;
+static gchar *raw_buffer = NULL;
+static gint raw_buffer_size = 0;
+static gint buffer_pull_count = 0;
+static gint current_offset = 0;
 
 #define TEST_VIDEO_WIDTH 640
 #define TEST_VIDEO_HEIGHT 480
@@ -49,6 +54,12 @@ typedef struct _GstParserTesterClass GstParserTesterClass;
 struct _GstParserTester
 {
   GstBaseParse parent;
+
+  guint min_frame_size;
+  guint last_frame_size;
+
+  /* don't immediately set the src caps when receiving sink caps */
+  gboolean delay_srccaps;
 };
 
 struct _GstParserTesterClass
@@ -73,7 +84,11 @@ gst_parser_tester_stop (GstBaseParse * parse)
 static gboolean
 gst_parser_tester_set_sink_caps (GstBaseParse * parse, GstCaps * caps)
 {
-  gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (parse), caps);
+  GstParserTester *test = (GstParserTester *) parse;
+
+  if (!test->delay_srccaps)
+    gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (parse), caps);
+
   return TRUE;
 }
 
@@ -82,6 +97,8 @@ gst_parser_tester_handle_frame (GstBaseParse * parse,
     GstBaseParseFrame * frame, gint * skipsize)
 {
   GstFlowReturn ret = GST_FLOW_OK;
+  GstParserTester *test = (GstParserTester *) (parse);
+  gsize frame_size;
 
   if (caps_set == FALSE) {
     GstCaps *caps;
@@ -95,11 +112,35 @@ gst_parser_tester_handle_frame (GstBaseParse * parse,
     caps_set = TRUE;
   }
 
-  while (frame->buffer && gst_buffer_get_size (frame->buffer) >= 8) {
+  /* Base parse always passes a buffer, or it's a bug */
+  fail_unless (frame->buffer != NULL);
+
+  frame_size = gst_buffer_get_size (frame->buffer);
+
+  /* Require that baseparse collect enough input
+   * for 2 output frames */
+  if (frame_size < test->min_frame_size) {
+    /* We need more data for this */
+    *skipsize = 0;
+
+    /* If we skipped data before, last_frame_size will be set, and
+     * base parse must pass more data next time */
+    fail_unless (frame_size >= test->last_frame_size);
+    test->last_frame_size = frame_size;
+
+    return GST_FLOW_OK;
+  }
+  /* Reset our expectation of frame size once we've collected
+   * a full frame */
+  test->last_frame_size = 0;
+
+  while (frame_size >= test->min_frame_size) {
     GST_BUFFER_DURATION (frame->buffer) =
         gst_util_uint64_scale_round (GST_SECOND, TEST_VIDEO_FPS_D,
         TEST_VIDEO_FPS_N);
-    ret = gst_base_parse_finish_frame (parse, frame, 8);
+    ret = gst_base_parse_finish_frame (parse, frame, test->min_frame_size);
+    if (frame->buffer == NULL)
+      break;                    // buffer finished
   }
   return ret;
 }
@@ -133,6 +174,7 @@ gst_parser_tester_class_init (GstParserTesterClass * klass)
 static void
 gst_parser_tester_init (GstParserTester * tester)
 {
+  tester->min_frame_size = 8;
 }
 
 static void
@@ -453,6 +495,234 @@ GST_START_TEST (parser_reverse_playback)
 
 GST_END_TEST;
 
+static GstFlowReturn
+_sink_chain_pull_short_read (GstPad * pad, GstObject * parent,
+    GstBuffer * buffer)
+{
+  GstMapInfo map;
+  gint buffer_size = 0;
+  gint compare_result = 0;
+  gint64 result_offset = GST_BUFFER_OFFSET (buffer);
+
+  gst_buffer_map (buffer, &map, GST_MAP_READ);
+  buffer_size = map.size;
+
+  fail_unless (result_offset + buffer_size <= raw_buffer_size);
+  compare_result = memcmp (map.data, &raw_buffer[result_offset], buffer_size);
+  fail_unless_equals_int (compare_result, 0);
+
+  gst_buffer_unmap (buffer, &map);
+  gst_buffer_unref (buffer);
+
+  have_data = TRUE;
+  buffer_count++;
+
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+_src_getrange_pull_short_read (GstPad * pad, GstObject * parent,
+    guint64 offset, guint length, GstBuffer ** buffer)
+{
+  GstBuffer *buf = NULL;
+  gchar *data = NULL;
+  guint buffer_size = 0;
+
+  if (offset == raw_buffer_size) {
+    /* pulled all buffer */
+    return GST_FLOW_EOS;
+  }
+
+  if (offset + length <= raw_buffer_size) {
+    buffer_size = length;
+  } else {
+    /* buffer size is less than request size */
+    buffer_size = raw_buffer_size - offset;
+  }
+
+  data = g_malloc (buffer_size);
+  memcpy (data, &raw_buffer[offset], buffer_size);
+  buf = gst_buffer_new_wrapped (data, buffer_size);
+
+  GST_BUFFER_PTS (buf) =
+      gst_util_uint64_scale_round (buffer_pull_count,
+      GST_SECOND * TEST_VIDEO_FPS_D, TEST_VIDEO_FPS_N);
+  GST_BUFFER_DURATION (buf) =
+      gst_util_uint64_scale_round (GST_SECOND, TEST_VIDEO_FPS_D,
+      TEST_VIDEO_FPS_N);
+
+  *buffer = buf;
+  current_offset = offset;
+  buffer_pull_count++;
+
+  return GST_FLOW_OK;
+}
+
+GST_START_TEST (parser_pull_short_read)
+{
+  gint i, j;
+  raw_buffer_size = (64 * 1024) + 512;
+  raw_buffer = g_malloc (raw_buffer_size);
+
+  for (i = 0; i < raw_buffer_size; i++) {
+    j = i % 26;
+    raw_buffer[i] = 'a' + j;
+  }
+
+  have_eos = FALSE;
+  have_data = FALSE;
+  buffer_count = 0;
+  loop = g_main_loop_new (NULL, FALSE);
+
+  setup_parsertester ();
+  gst_pad_set_getrange_function (mysrcpad, _src_getrange_pull_short_read);
+  gst_pad_set_query_function (mysrcpad, _src_query);
+  gst_pad_set_chain_function (mysinkpad, _sink_chain_pull_short_read);
+  gst_pad_set_event_function (mysinkpad, _sink_event);
+  gst_base_parse_set_min_frame_size (GST_BASE_PARSE (parsetest), 1024);
+
+  gst_pad_set_active (mysrcpad, TRUE);
+  gst_element_set_state (parsetest, GST_STATE_PLAYING);
+  gst_pad_set_active (mysinkpad, TRUE);
+
+  g_main_loop_run (loop);
+  fail_unless_equals_int (have_eos, TRUE);
+  fail_unless_equals_int (have_data, TRUE);
+  /* If the parser asked upstream for buffers more times than buffers were
+   * produced, then something is wrong */
+  fail_unless (buffer_pull_count <= buffer_count);
+
+  gst_element_set_state (parsetest, GST_STATE_NULL);
+
+  check_no_error_received ();
+  cleanup_parsertest ();
+
+  g_main_loop_unref (loop);
+  loop = NULL;
+}
+
+GST_END_TEST;
+
+/* parser_pull_frame_growth test */
+
+/* Buffer size is chosen to interact with
+ * the 64KB that baseparse reads
+ * from upstream as cache size */
+#define BUFSIZE (123 * 1024)
+
+static GstFlowReturn
+_sink_chain_pull_frame_growth (GstPad * pad, GstObject * parent,
+    GstBuffer * buffer)
+{
+  gst_buffer_unref (buffer);
+
+  have_data = TRUE;
+  buffer_count++;
+
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+_src_getrange_64k (GstPad * pad, GstObject * parent, guint64 offset,
+    guint length, GstBuffer ** buffer)
+{
+  guint8 *data;
+
+  /* Our "file" is large enough for 4 packets exactly */
+  if (offset >= BUFSIZE * 4)
+    return GST_FLOW_EOS;
+
+  /* Return a buffer of the size baseparse asked for */
+  data = g_malloc0 (length);
+  *buffer = gst_buffer_new_wrapped (data, length);
+
+  return GST_FLOW_OK;
+}
+
+/* Test that when we fail to parse a frame from
+ * the provided data, that baseparse provides a larger
+ * buffer on the next iteration */
+GST_START_TEST (parser_pull_frame_growth)
+{
+  have_eos = FALSE;
+  have_data = FALSE;
+  loop = g_main_loop_new (NULL, FALSE);
+
+  setup_parsertester ();
+  buffer_count = 0;
+
+  /* This size is chosen to require that baseparse pull
+   * a 2nd 64KB buffer */
+  ((GstParserTester *) (parsetest))->min_frame_size = BUFSIZE;
+
+  gst_pad_set_getrange_function (mysrcpad, _src_getrange_64k);
+  gst_pad_set_query_function (mysrcpad, _src_query);
+  gst_pad_set_chain_function (mysinkpad, _sink_chain_pull_frame_growth);
+  gst_pad_set_event_function (mysinkpad, _sink_event);
+  gst_base_parse_set_min_frame_size (GST_BASE_PARSE (parsetest), 1024);
+
+  gst_pad_set_active (mysrcpad, TRUE);
+  gst_element_set_state (parsetest, GST_STATE_PLAYING);
+  gst_pad_set_active (mysinkpad, TRUE);
+
+  g_main_loop_run (loop);
+  fail_unless (have_eos == TRUE);
+  fail_unless (have_data == TRUE);
+
+  gst_element_set_state (parsetest, GST_STATE_NULL);
+
+  check_no_error_received ();
+  cleanup_parsertest ();
+
+  g_main_loop_unref (loop);
+  loop = NULL;
+}
+
+GST_END_TEST;
+
+GST_START_TEST (parser_initial_gap_prefer_upstream_caps)
+{
+  GstHarness *h;
+  GstCaps *upstream_caps, *downstream_caps, *caps;
+  GstEvent *e;
+
+  parsetest = g_object_new (GST_PARSER_TESTER_TYPE, NULL);
+  /* we need this so that baseparse tries to negotiate default caps */
+  ((GstParserTester *) parsetest)->delay_srccaps = TRUE;
+
+  h = gst_harness_new_with_element (parsetest, "sink", "src");
+  downstream_caps =
+      gst_caps_new_simple ("video/x-test-custom", "width", GST_TYPE_INT_RANGE,
+      TEST_VIDEO_WIDTH - 2, TEST_VIDEO_WIDTH + 2, "height", G_TYPE_INT,
+      TEST_VIDEO_HEIGHT, "framerate", GST_TYPE_FRACTION, TEST_VIDEO_FPS_N,
+      TEST_VIDEO_FPS_D, NULL);
+  upstream_caps =
+      gst_caps_new_simple ("video/x-test-custom", "width", G_TYPE_INT,
+      TEST_VIDEO_WIDTH * 2, "height", G_TYPE_INT, TEST_VIDEO_HEIGHT * 2,
+      "framerate", GST_TYPE_FRACTION, TEST_VIDEO_FPS_N, TEST_VIDEO_FPS_D, NULL);
+  gst_harness_set_caps (h, upstream_caps, downstream_caps);
+
+  fail_unless (gst_harness_push_event (h, gst_event_new_gap (0,
+              GST_CLOCK_TIME_NONE)));
+
+  fail_unless (e = gst_harness_pull_event (h));
+  fail_unless_equals_int (GST_EVENT_STREAM_START, GST_EVENT_TYPE (e));
+  gst_event_unref (e);
+
+  fail_unless (e = gst_harness_pull_event (h));
+  fail_unless_equals_int (GST_EVENT_CAPS, GST_EVENT_TYPE (e));
+  gst_event_parse_caps (e, &caps);
+  gst_event_unref (e);
+
+  fail_unless (gst_caps_can_intersect (caps, downstream_caps));
+
+  gst_harness_teardown (h);
+  gst_object_unref (parsetest);
+}
+
+GST_END_TEST;
+
+
 static void
 baseparse_setup (void)
 {
@@ -482,6 +752,9 @@ gst_baseparse_suite (void)
   tcase_add_test (tc, parser_empty_stream);
   tcase_add_test (tc, parser_reverse_playback_on_passthrough);
   tcase_add_test (tc, parser_reverse_playback);
+  tcase_add_test (tc, parser_pull_short_read);
+  tcase_add_test (tc, parser_pull_frame_growth);
+  tcase_add_test (tc, parser_initial_gap_prefer_upstream_caps);
 
   return s;
 }

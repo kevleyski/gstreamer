@@ -33,7 +33,6 @@ subdir('libcheck')
 
 configure_file(input : 'libcheck/check.h.in',
   output : 'internal-check.h',
-  install : true,
   install_dir : join_paths(get_option('includedir'), 'gstreamer-1.0/gst/check'),
   configuration : check_cdata)
 
@@ -49,11 +48,23 @@ gst_check = library('gstcheck-@0@'.format(apiversion),
   dependencies : [gobject_dep, glib_dep, gst_dep],
 )
 
+pkgconfig.generate(gst_check,
+  libraries : [libgst],
+  # FIXME: Add manually libcheck's dependencies because it's an uninstalled static
+  # library and Meson <0.56.0 does not handle them correctly.
+  # See https://github.com/mesonbuild/meson/pull/7488.
+  libraries_private: [rt_lib, mathlib],
+  variables : pkgconfig_variables,
+  subdirs : pkgconfig_subdirs,
+  name : 'gstreamer-check-1.0',
+  description : 'Unit testing helper library for GStreamer modules',
+)
+
 gst_check_gen_sources = []
 
 if build_gir
   gst_gir_extra_args = gir_init_section + [ '--c-include=gst/check/check.h' ]
-  gst_check_gen_sources += [gnome.generate_gir(gst_check,
+  gst_check_gir = gnome.generate_gir(gst_check,
     sources : gst_check_sources + gst_check_headers,
     namespace : 'GstCheck',
     nsversion : apiversion,
@@ -65,10 +76,13 @@ if build_gir
     includes : ['GLib-2.0', 'GObject-2.0', 'GModule-2.0', 'Gst-1.0'],
     install : true,
     extra_args : gst_gir_extra_args,
-  )]
+  )
+  gst_check_gen_sources += gst_check_gir
 endif
 
 gst_check_dep = declare_dependency(link_with : gst_check,
   include_directories : [libsinc],
   dependencies : [gst_dep],
   sources : gst_check_gen_sources)
+
+meson.override_dependency('gstreamer-check-1.0', gst_check_dep)

@@ -26,6 +26,8 @@
 #include <stdarg.h>
 #include <math.h>
 
+#include <glib.h>
+
 #include "internal-check.h"
 #include "check_error.h"
 #include "check_list.h"
@@ -52,7 +54,7 @@ int check_major_version = CHECK_MAJOR_VERSION;
 int check_minor_version = CHECK_MINOR_VERSION;
 int check_micro_version = CHECK_MICRO_VERSION;
 
-const char* current_test_name = NULL;
+const char *current_test_name = NULL;
 
 static int non_pass (int val);
 static Fixture *fixture_create (SFun fun, int ischecked);
@@ -342,7 +344,7 @@ tcase_fn_start (const char *fname, const char *file, int line)
 {
   send_ctx_info (CK_CTX_TEST);
   send_loc_info (file, line);
- 
+
   current_test_name = fname;
 }
 
@@ -384,13 +386,13 @@ _ck_assert_failed (const char *file, int line, const char *expr, ...)
 
   va_end (ap);
   send_failure_info (to_send);
-  if (cur_fork_status () == CK_FORK) {
 #if defined(HAVE_FORK) && HAVE_FORK==1
+  if (cur_fork_status () == CK_FORK) {
+    g_thread_pool_stop_unused_threads ();
     _exit (1);
-#endif /* HAVE_FORK */
-  } else {
-    longjmp (error_jmp_buffer, 1);
   }
+#endif /* HAVE_FORK */
+  longjmp (error_jmp_buffer, 1);
 }
 
 SRunner *

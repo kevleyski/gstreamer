@@ -48,7 +48,7 @@ struct _GstFakeObjectClass
 static GType
 gst_fake_object_get_type (void)
 {
-  static volatile gsize fake_object_type = 0;
+  static gsize fake_object_type = 0;
 
   if (g_once_init_enter (&fake_object_type)) {
     GType type;
@@ -403,7 +403,7 @@ GST_START_TEST (test_fake_object_name_threaded_unique)
   g_free (name1);
 
   /* free stuff */
-  g_list_foreach (object_list, (GFunc) g_object_unref, NULL);
+  g_list_foreach (object_list, (GFunc) gst_object_unref, NULL);
 }
 
 GST_END_TEST;
@@ -427,6 +427,7 @@ GST_START_TEST (test_fake_object_parentage)
   parent = gst_object_get_parent (object1);
   fail_if (parent != NULL, "GstFakeObject has parent");
   /* try to set a NULL parent, this should give a warning */
+  result = FALSE;
   ASSERT_CRITICAL (result = gst_object_set_parent (object1, NULL));
   fail_if (result, "GstFakeObject accepted NULL parent");
   /* try to set itself as parent, we expect a warning here */

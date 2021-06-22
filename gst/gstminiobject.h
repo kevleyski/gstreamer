@@ -29,12 +29,19 @@
 
 G_BEGIN_DECLS
 
+GST_API GType _gst_mini_object_type;
+
+#define GST_TYPE_MINI_OBJECT               (_gst_mini_object_type)
+
 #define GST_IS_MINI_OBJECT_TYPE(obj,type)  ((obj) && GST_MINI_OBJECT_TYPE(obj) == (type))
 #define GST_MINI_OBJECT_CAST(obj)          ((GstMiniObject*)(obj))
 #define GST_MINI_OBJECT_CONST_CAST(obj)    ((const GstMiniObject*)(obj))
 #define GST_MINI_OBJECT(obj)               (GST_MINI_OBJECT_CAST(obj))
 
 typedef struct _GstMiniObject GstMiniObject;
+
+GST_API
+GType           gst_mini_object_get_type   (void);
 
 /**
  * GstMiniObjectCopyFunction:
@@ -126,7 +133,7 @@ typedef void (*GstMiniObjectNotify) (gpointer user_data, GstMiniObject * obj);
  * READONLY mode. Only read locks can be performed on the object.
  * @GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED: the object is expected to stay alive
  * even after gst_deinit() has been called and so should be ignored by leak
- * detection tools. (Since 1.10)
+ * detection tools. (Since: 1.10)
  * @GST_MINI_OBJECT_FLAG_LAST: first flag that can be used by subclasses.
  *
  * Flags for the mini object
@@ -233,6 +240,10 @@ GstMiniObject * gst_mini_object_ref		(GstMiniObject *mini_object);
 
 GST_API
 void            gst_mini_object_unref		(GstMiniObject *mini_object);
+
+GST_API
+void        gst_clear_mini_object (GstMiniObject **object_ptr);
+#define     gst_clear_mini_object(object_ptr) g_clear_pointer ((object_ptr), gst_mini_object_unref)
 
 GST_API
 void            gst_mini_object_weak_ref        (GstMiniObject *object,

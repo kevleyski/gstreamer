@@ -212,7 +212,7 @@ static void
 gst_list_iterator_free (GstListIterator * it)
 {
   if (it->owner)
-    g_object_unref (it->owner);
+    gst_object_unref (it->owner);
 }
 
 /**
@@ -629,12 +629,7 @@ gst_iterator_fold (GstIterator * it, GstIteratorFoldFunction func,
 
 fold_done:
 
-#if GLIB_CHECK_VERSION (2, 48, 0)
   g_value_unset (&item);
-#else
-  if (item.g_type != 0)
-    g_value_unset (&item);
-#endif
 
   return result;
 }

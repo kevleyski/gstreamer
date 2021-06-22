@@ -192,7 +192,7 @@ GST_START_TEST (test_ghost_pads_notarget)
   fail_unless (peer == srcpad);
   gst_object_unref (peer);
 
-  /* check caps, untargetted pad should return ANY or the padtemplate caps 
+  /* check caps, untargeted pad should return ANY or the padtemplate caps 
    * when it was created from a template */
   caps = gst_pad_query_caps (srcpad, NULL);
   fail_unless (gst_caps_is_any (caps));
@@ -949,6 +949,7 @@ GST_START_TEST (test_ghost_pads_src_link_unlink)
   fail_unless (unlinked_count2 == 0);
 
   /* this should fail with a critial */
+  dummy = NULL;
   ASSERT_CRITICAL (dummy = gst_ghost_pad_new ("ghostpad", srcpad));
   fail_unless (dummy == NULL);
   fail_unless (linked_count1 == 1);
@@ -1392,7 +1393,7 @@ GST_START_TEST (test_deactivate_already_deactive_with_no_parent)
   fail_unless (gst_element_add_pad (bin, pad));
   fail_unless (gst_element_remove_pad (bin, pad));
 
-  /* Setting a pad that's already deactive to deactive should not fail. */
+  /* Setting a pad that's already deactivated to deactivated should not fail. */
   fail_if (gst_pad_is_active (pad));
   fail_unless (gst_pad_activate_mode (pad, GST_PAD_MODE_PUSH, FALSE));
 

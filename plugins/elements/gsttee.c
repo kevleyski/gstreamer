@@ -50,6 +50,7 @@
 #endif
 
 #include "gsttee.h"
+#include "gstcoreelementselements.h"
 #include "gst/glib-compat-private.h"
 
 #include <string.h>
@@ -109,6 +110,7 @@ static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src_%u",
     GST_DEBUG_CATEGORY_INIT (gst_tee_debug, "tee", 0, "tee element");
 #define gst_tee_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstTee, gst_tee, GST_TYPE_ELEMENT, _do_init);
+GST_ELEMENT_REGISTER_DEFINE (tee, "tee", GST_RANK_NONE, GST_TYPE_TEE);
 
 static GParamSpec *pspec_last_message = NULL;
 static GParamSpec *pspec_alloc_pad = NULL;
@@ -297,6 +299,8 @@ gst_tee_class_init (GstTeeClass * klass)
   gstelement_class->request_new_pad =
       GST_DEBUG_FUNCPTR (gst_tee_request_new_pad);
   gstelement_class->release_pad = GST_DEBUG_FUNCPTR (gst_tee_release_pad);
+
+  gst_type_mark_as_plugin_api (GST_TYPE_TEE_PULL_MODE, 0);
 }
 
 static void
@@ -460,12 +464,8 @@ gst_tee_release_pad (GstElement * element, GstPad * pad)
   }
   GST_OBJECT_UNLOCK (tee);
 
-  gst_object_ref (pad);
-  gst_element_remove_pad (GST_ELEMENT_CAST (tee), pad);
-
   gst_pad_set_active (pad, FALSE);
-
-  gst_object_unref (pad);
+  gst_element_remove_pad (GST_ELEMENT_CAST (tee), pad);
 
   if (changed) {
     gst_tee_notify_alloc_pad (tee);
@@ -899,12 +899,14 @@ gst_tee_handle_data (GstTee * tee, gpointer data, gboolean is_list)
       ret = gst_pad_push (pad, GST_BUFFER_CAST (data));
     }
 
+    GST_OBJECT_LOCK (tee);
     if (GST_TEE_PAD_CAST (pad)->removed)
       ret = GST_FLOW_NOT_LINKED;
 
     if (ret == GST_FLOW_NOT_LINKED && tee->allow_not_linked) {
       ret = GST_FLOW_OK;
     }
+    GST_OBJECT_UNLOCK (tee);
 
     gst_object_unref (pad);
 
@@ -943,6 +945,8 @@ restart:
 
       GST_OBJECT_LOCK (tee);
       /* keep track of which pad we pushed and the result value */
+      if (GST_TEE_PAD_CAST (pad)->removed)
+        ret = GST_FLOW_NOT_LINKED;
       GST_TEE_PAD_CAST (pad)->pushed = TRUE;
       GST_TEE_PAD_CAST (pad)->result = ret;
       gst_object_unref (pad);

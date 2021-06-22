@@ -102,9 +102,9 @@ typedef enum {
  * @mem_share: the implementation of the GstMemoryShareFunction
  * @mem_is_span: the implementation of the GstMemoryIsSpanFunction
  * @mem_map_full: the implementation of the GstMemoryMapFullFunction.
- *      Will be used instead of @mem_map if present. (Since 1.6)
+ *      Will be used instead of @mem_map if present. (Since: 1.6)
  * @mem_unmap_full: the implementation of the GstMemoryUnmapFullFunction.
- *      Will be used instead of @mem_unmap if present. (Since 1.6)
+ *      Will be used instead of @mem_unmap if present. (Since: 1.6)
  *
  * The #GstAllocator is used to create new memory.
  */
@@ -168,6 +168,9 @@ void           gst_allocator_set_default     (GstAllocator * allocator);
 /* allocation parameters */
 
 GST_API
+GstAllocationParams * gst_allocation_params_new (void) G_GNUC_MALLOC;
+
+GST_API
 void           gst_allocation_params_init    (GstAllocationParams *params);
 
 GST_API
@@ -191,9 +194,7 @@ GstMemory *    gst_memory_new_wrapped  (GstMemoryFlags flags, gpointer data, gsi
                                         gsize offset, gsize size, gpointer user_data,
                                         GDestroyNotify notify);
 
-#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstAllocationParams, gst_allocation_params_free)
-#endif
 
 G_END_DECLS
 

@@ -51,9 +51,17 @@ gst_base = library('gstbase-@0@'.format(apiversion),
   dependencies : [gobject_dep, glib_dep, gst_dep],
 )
 
+pkgconfig.generate(gst_base,
+  libraries : [libgst],
+  variables : pkgconfig_variables,
+  subdirs : pkgconfig_subdirs,
+  name : 'gstreamer-base-1.0',
+  description : 'Base classes for GStreamer elements',
+)
+
 if build_gir
   gst_gir_extra_args = gir_init_section + [ '--c-include=gst/base/base.h' ]
-  gst_base_gen_sources += [gnome.generate_gir(gst_base,
+  gst_base_gir = gnome.generate_gir(gst_base,
     sources : gst_base_sources + gst_base_headers,
     namespace : 'GstBase',
     nsversion : apiversion,
@@ -65,13 +73,17 @@ if build_gir
     includes : ['GLib-2.0', 'GObject-2.0', 'GModule-2.0', 'Gst-1.0'],
     install : true,
     extra_args : gst_gir_extra_args,
-  )]
+  )
+
+  gst_base_gen_sources += [gst_base_gir]
 endif
 
 gst_base_dep = declare_dependency(link_with : gst_base,
   include_directories : [libsinc],
   dependencies : [gst_dep],
   sources : gst_base_gen_sources)
+
+meson.override_dependency('gstreamer-base-1.0', gst_base_dep)
 
 install_headers('base.h',
   'base-prelude.h',

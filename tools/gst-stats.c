@@ -37,12 +37,46 @@ static GRegex *ansi_log = NULL;
 static GHashTable *threads = NULL;
 static GPtrArray *elements = NULL;
 static GPtrArray *pads = NULL;
+static GHashTable *latencies = NULL;
+static GHashTable *element_latencies = NULL;
+static GQueue *element_reported_latencies = NULL;
 static guint64 num_buffers = 0, num_events = 0, num_messages = 0, num_queries =
     0;
 static guint num_elements = 0, num_bins = 0, num_pads = 0, num_ghostpads = 0;
 static GstClockTime last_ts = G_GUINT64_CONSTANT (0);
 static guint total_cpuload = 0;
 static gboolean have_cpuload = FALSE;
+
+static gboolean have_latency = FALSE;
+static gboolean have_element_latency = FALSE;
+static gboolean have_element_reported_latency = FALSE;
+
+typedef struct
+{
+  /* display name of the element */
+  gchar *name;
+  /* the number of latencies counted  */
+  guint64 count;
+  /* the total of all latencies */
+  guint64 total;
+  /* the min of all latencies */
+  guint64 min;
+  /* the max of all latencies */
+  guint64 max;
+  GstClockTime first_latency_ts;
+} GstLatencyStats;
+
+typedef struct
+{
+  /* The element name */
+  gchar *element;
+  /* The timestamp of the reported latency */
+  guint64 ts;
+  /* the min reported latency */
+  guint64 min;
+  /* the max reported latency */
+  guint64 max;
+} GstReportedLatency;
 
 typedef struct
 {
@@ -89,6 +123,52 @@ typedef struct
 } GstThreadStats;
 
 /* stats helper */
+
+static gint
+sort_latency_stats_by_first_ts (gconstpointer a, gconstpointer b)
+{
+  const GstLatencyStats *ls1 = a, *ls2 = b;
+
+  return (GST_CLOCK_DIFF (ls2->first_latency_ts, ls1->first_latency_ts));
+}
+
+static void
+print_latency_stats (gpointer value, gpointer user_data)
+{
+  GstLatencyStats *ls = value;
+
+  printf ("\t%s: mean=%" GST_TIME_FORMAT " min=%" GST_TIME_FORMAT " max=%"
+      GST_TIME_FORMAT "\n", ls->name, GST_TIME_ARGS (ls->total / ls->count),
+      GST_TIME_ARGS (ls->min), GST_TIME_ARGS (ls->max));
+}
+
+static void
+reported_latencies_foreach_print_stats (GstReportedLatency * rl, gpointer data)
+{
+  printf ("\t%s: min=%" GST_TIME_FORMAT " max=%" GST_TIME_FORMAT " ts=%"
+      GST_TIME_FORMAT "\n", rl->element, GST_TIME_ARGS (rl->min),
+      GST_TIME_ARGS (rl->max), GST_TIME_ARGS (rl->ts));
+}
+
+static void
+free_latency_stats (gpointer data)
+{
+  GstLatencyStats *ls = data;
+
+  g_free (ls->name);
+  g_slice_free (GstLatencyStats, data);
+}
+
+static void
+free_reported_latency (gpointer data)
+{
+  GstReportedLatency *rl = data;
+
+  if (rl->element)
+    g_free (rl->element);
+
+  g_free (data);
+}
 
 static void
 free_element_stats (gpointer data)
@@ -410,6 +490,124 @@ do_proc_rusage_stats (GstStructure * s)
   have_cpuload = TRUE;
 }
 
+static void
+update_latency_table (GHashTable * table, const gchar * key, guint64 time,
+    GstClockTime ts)
+{
+  /* Find the values in the hash table */
+  GstLatencyStats *ls = g_hash_table_lookup (table, key);
+  if (!ls) {
+    /* Insert the new key if the value does not exist */
+    ls = g_new0 (GstLatencyStats, 1);
+    ls->name = g_strdup (key);
+    ls->count = 1;
+    ls->total = time;
+    ls->min = time;
+    ls->max = time;
+    ls->first_latency_ts = ts;
+    g_hash_table_insert (table, g_strdup (key), ls);
+  } else {
+    /* Otherwise update the existing value */
+    ls->count++;
+    ls->total += time;
+    if (ls->min > time)
+      ls->min = time;
+    if (ls->max < time)
+      ls->max = time;
+  }
+}
+
+static void
+do_latency_stats (GstStructure * s)
+{
+  gchar *key = NULL;
+  const gchar *src = NULL, *sink = NULL, *src_element = NULL,
+      *sink_element = NULL, *src_element_id = NULL, *sink_element_id = NULL;
+  guint64 ts = 0, time = 0;
+
+  /* Get the values from the structure */
+  src = gst_structure_get_string (s, "src");
+  sink = gst_structure_get_string (s, "sink");
+  src_element = gst_structure_get_string (s, "src-element");
+  sink_element = gst_structure_get_string (s, "sink-element");
+  src_element_id = gst_structure_get_string (s, "src-element-id");
+  sink_element_id = gst_structure_get_string (s, "sink-element-id");
+  gst_structure_get (s, "time", G_TYPE_UINT64, &time, NULL);
+  gst_structure_get (s, "ts", G_TYPE_UINT64, &ts, NULL);
+
+  /* Update last_ts */
+  last_ts = MAX (last_ts, ts);
+
+  /* Get the key */
+  key = g_strdup_printf ("%s.%s.%s|%s.%s.%s", src_element_id, src_element,
+      src, sink_element_id, sink_element, sink);
+
+  /* Update the latency in the table */
+  update_latency_table (latencies, key, time, ts);
+
+  /* Clean up */
+  g_free (key);
+
+  have_latency = TRUE;
+}
+
+static void
+do_element_latency_stats (GstStructure * s)
+{
+  gchar *key = NULL;
+  const gchar *src = NULL, *element = NULL, *element_id = NULL;
+  guint64 ts = 0, time = 0;
+
+  /* Get the values from the structure */
+  src = gst_structure_get_string (s, "src");
+  element = gst_structure_get_string (s, "element");
+  element_id = gst_structure_get_string (s, "element-id");
+  gst_structure_get (s, "time", G_TYPE_UINT64, &time, NULL);
+  gst_structure_get (s, "ts", G_TYPE_UINT64, &ts, NULL);
+
+  /* Update last_ts */
+  last_ts = MAX (last_ts, ts);
+
+  /* Get the key */
+  key = g_strdup_printf ("%s.%s.%s", element_id, element, src);
+
+  /* Update the latency in the table */
+  update_latency_table (element_latencies, key, time, ts);
+
+  /* Clean up */
+  g_free (key);
+
+  have_element_latency = TRUE;
+}
+
+static void
+do_element_reported_latency (GstStructure * s)
+{
+  const gchar *element = NULL, *element_id = NULL;
+  guint64 ts = 0, min = 0, max = 0;
+  GstReportedLatency *rl = NULL;
+
+  /* Get the values from the structure */
+  element_id = gst_structure_get_string (s, "element-id");
+  element = gst_structure_get_string (s, "element");
+  gst_structure_get (s, "min", G_TYPE_UINT64, &min, NULL);
+  gst_structure_get (s, "max", G_TYPE_UINT64, &max, NULL);
+  gst_structure_get (s, "ts", G_TYPE_UINT64, &ts, NULL);
+
+  /* Update last_ts */
+  last_ts = MAX (last_ts, ts);
+
+  /* Insert/Update the key in the table */
+  rl = g_new0 (GstReportedLatency, 1);
+  rl->element = g_strdup_printf ("%s.%s", element_id, element);
+  rl->ts = ts;
+  rl->min = min;
+  rl->max = max;
+  g_queue_push_tail (element_reported_latencies, rl);
+
+  have_element_reported_latency = TRUE;
+}
+
 /* reporting */
 
 static gint
@@ -495,22 +693,22 @@ print_element_stats (gpointer value, gpointer user_data)
 
     printf ("  %-45s:", fullname);
     if (stats->recv_buffers)
-      printf (" buffers in/out %7u", stats->recv_buffers);
+      g_print (" buffers in/out %7u", stats->recv_buffers);
     else
-      printf (" buffers in/out %7s", "-");
+      g_print (" buffers in/out %7s", "-");
     if (stats->sent_buffers)
-      printf ("/%7u", stats->sent_buffers);
+      g_print ("/%7u", stats->sent_buffers);
     else
-      printf ("/%7s", "-");
+      g_print ("/%7s", "-");
     if (stats->recv_bytes)
-      printf (" bytes in/out %12" G_GUINT64_FORMAT, stats->recv_bytes);
+      g_print (" bytes in/out %12" G_GUINT64_FORMAT, stats->recv_bytes);
     else
-      printf (" bytes in/out %12s", "-");
+      g_print (" bytes in/out %12s", "-");
     if (stats->sent_bytes)
-      printf ("/%12" G_GUINT64_FORMAT, stats->sent_bytes);
+      g_print ("/%12" G_GUINT64_FORMAT, stats->sent_bytes);
     else
       printf ("/%12s", "-");
-    printf (" first activity %" GST_TIME_FORMAT ", "
+    g_print (" first activity %" GST_TIME_FORMAT ", "
         " ev/msg/qry sent %5u/%5u/%5u\n", GST_TIME_ARGS (stats->first_ts),
         stats->num_events, stats->num_messages, stats->num_queries);
   }
@@ -575,7 +773,7 @@ sort_element_stats_by_first_activity (gconstpointer es1, gconstpointer es2)
 static void
 sort_bin_stats (gpointer value, gpointer user_data)
 {
-  if (((GstElementStats *) value)->is_bin) {
+  if (value != NULL && ((GstElementStats *) value)->is_bin) {
     GSList **list = user_data;
 
     *list =
@@ -587,7 +785,7 @@ sort_bin_stats (gpointer value, gpointer user_data)
 static void
 sort_element_stats (gpointer value, gpointer user_data)
 {
-  if (!(((GstElementStats *) value)->is_bin)) {
+  if (value != NULL && !(((GstElementStats *) value)->is_bin)) {
     GSList **list = user_data;
 
     *list =
@@ -624,14 +822,16 @@ static gboolean
 init (void)
 {
   /* compile the parser regexps */
-  /* 0:00:00.004925027 31586      0x1c5c600 DEBUG           GST_REGISTRY gstregistry.c:463:gst_registry_add_plugin:<registry0> adding plugin 0x1c79160 for filename "/usr/lib/gstreamer-1.0/libgstxxx.so" */
+  /* 0:00:00.004925027 31586      0x1c5c600 DEBUG           GST_REGISTRY gstregistry.c:463:gst_registry_add_plugin:<registry0> adding plugin 0x1c79160 for filename "/usr/lib/gstreamer-1.0/libgstxxx.so"
+   * 0:00:02.719599000 35292 000001C031A49C60 DEBUG             GST_TRACER gsttracer.c:162:gst_tracer_register:<registry0> update existing feature 000001C02F9843C0 (latency)
+   */
   raw_log = g_regex_new (
       /* 1: ts */
       "^([0-9:.]+) +"
       /* 2: pid */
       "([0-9]+) +"
       /* 3: thread */
-      "(0x[0-9a-fA-F]+) +"
+      "(0?x?[0-9a-fA-F]+) +"
       /* 4: level */
       "([A-Z]+) +"
       /* 5: category */
@@ -668,6 +868,11 @@ init (void)
   elements = g_ptr_array_new_with_free_func (free_element_stats);
   pads = g_ptr_array_new_with_free_func (free_pad_stats);
   threads = g_hash_table_new_full (NULL, NULL, NULL, free_thread_stats);
+  latencies = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+      free_latency_stats);
+  element_latencies = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+      free_latency_stats);
+  element_reported_latencies = g_queue_new ();
 
   return TRUE;
 }
@@ -682,6 +887,21 @@ done (void)
   if (threads)
     g_hash_table_destroy (threads);
 
+  if (latencies) {
+    g_hash_table_remove_all (latencies);
+    g_hash_table_destroy (latencies);
+    latencies = NULL;
+  }
+  if (element_latencies) {
+    g_hash_table_remove_all (element_latencies);
+    g_hash_table_destroy (element_latencies);
+    element_latencies = NULL;
+  }
+  if (element_reported_latencies) {
+    g_queue_free_full (element_reported_latencies, free_reported_latency);
+    element_reported_latencies = NULL;
+  }
+
   if (raw_log)
     g_regex_unref (raw_log);
   if (ansi_log)
@@ -694,21 +914,21 @@ print_stats (void)
   guint num_threads = g_hash_table_size (threads);
 
   /* print overall stats */
-  puts ("\nOverall Statistics:");
-  printf ("Number of Threads: %u\n", num_threads);
-  printf ("Number of Elements: %u\n", num_elements - num_bins);
-  printf ("Number of Bins: %u\n", num_bins);
-  printf ("Number of Pads: %u\n", num_pads - num_ghostpads);
-  printf ("Number of GhostPads: %u\n", num_ghostpads);
-  printf ("Number of Buffers passed: %" G_GUINT64_FORMAT "\n", num_buffers);
-  printf ("Number of Events sent: %" G_GUINT64_FORMAT "\n", num_events);
-  printf ("Number of Message sent: %" G_GUINT64_FORMAT "\n", num_messages);
-  printf ("Number of Queries sent: %" G_GUINT64_FORMAT "\n", num_queries);
-  printf ("Time: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS (last_ts));
+  g_print ("\nOverall Statistics:\n");
+  g_print ("Number of Threads: %u\n", num_threads);
+  g_print ("Number of Elements: %u\n", num_elements - num_bins);
+  g_print ("Number of Bins: %u\n", num_bins);
+  g_print ("Number of Pads: %u\n", num_pads - num_ghostpads);
+  g_print ("Number of GhostPads: %u\n", num_ghostpads);
+  g_print ("Number of Buffers passed: %" G_GUINT64_FORMAT "\n", num_buffers);
+  g_print ("Number of Events sent: %" G_GUINT64_FORMAT "\n", num_events);
+  g_print ("Number of Message sent: %" G_GUINT64_FORMAT "\n", num_messages);
+  g_print ("Number of Queries sent: %" G_GUINT64_FORMAT "\n", num_queries);
+  g_print ("Time: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS (last_ts));
   if (have_cpuload) {
-    printf ("Avg CPU load: %4.1f %%\n", (gfloat) total_cpuload / 10.0);
+    g_print ("Avg CPU load: %4.1f %%\n", (gfloat) total_cpuload / 10.0);
   }
-  puts ("");
+  g_print ("\n");
 
   /* thread stats */
   if (num_threads) {
@@ -744,7 +964,7 @@ print_stats (void)
     /* attribute bin stats to parent-bins */
     for (i = 0; i < num_elements; i++) {
       GstElementStats *stats = g_ptr_array_index (elements, i);
-      if (stats->is_bin) {
+      if (stats != NULL && stats->is_bin) {
         g_hash_table_insert (accum_bins, GUINT_TO_POINTER (i), stats);
       }
     }
@@ -757,6 +977,40 @@ print_stats (void)
     g_slist_foreach (list, print_element_stats, NULL);
     puts ("");
     g_slist_free (list);
+  }
+
+  /* latency stats */
+  if (have_latency) {
+    GList *list = NULL;
+
+    puts ("Latency Statistics:");
+    list = g_hash_table_get_values (latencies);
+    /* Sort by first activity */
+    list = g_list_sort (list, sort_latency_stats_by_first_ts);
+    g_list_foreach (list, print_latency_stats, NULL);
+    puts ("");
+    g_list_free (list);
+  }
+
+  /* element latency stats */
+  if (have_element_latency) {
+    GList *list = NULL;
+
+    puts ("Element Latency Statistics:");
+    list = g_hash_table_get_values (element_latencies);
+    /* Sort by first activity */
+    list = g_list_sort (list, sort_latency_stats_by_first_ts);
+    g_list_foreach (list, print_latency_stats, NULL);
+    puts ("");
+    g_list_free (list);
+  }
+
+  /* element reported latency stats */
+  if (have_element_reported_latency) {
+    puts ("Element Reported Latency:");
+    g_queue_foreach (element_reported_latencies,
+        (GFunc) reported_latencies_foreach_print_stats, NULL);
+    puts ("");
   }
 }
 
@@ -812,6 +1066,12 @@ collect_stats (const gchar * filename)
                   do_thread_rusage_stats (s);
                 } else if (!strcmp (name, "proc-rusage")) {
                   do_proc_rusage_stats (s);
+                } else if (!strcmp (name, "latency")) {
+                  do_latency_stats (s);
+                } else if (!strcmp (name, "element-latency")) {
+                  do_element_latency_stats (s);
+                } else if (!strcmp (name, "element-reported-latency")) {
+                  do_element_reported_latency (s);
                 } else {
                   // TODO(ensonic): parse the xxx.class log lines
                   if (!g_str_has_suffix (data, ".class")) {
@@ -822,7 +1082,9 @@ collect_stats (const gchar * filename)
               } else {
                 GST_WARNING ("unknown log entry: '%s'", data);
               }
+              g_free (data);
             }
+            g_free (level);
           } else {
             if (*line) {
               GST_WARNING ("foreign log entry: %s:%d:'%s'", filename, lnr,

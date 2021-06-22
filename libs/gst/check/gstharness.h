@@ -189,6 +189,9 @@ GST_CHECK_API
 GstBuffer *    gst_harness_try_pull (GstHarness * h);
 
 GST_CHECK_API
+gboolean       gst_harness_pull_until_eos (GstHarness * h, GstBuffer ** buf);
+
+GST_CHECK_API
 GstBuffer *    gst_harness_push_and_pull (GstHarness * h, GstBuffer * buffer);
 
 GST_CHECK_API
@@ -257,7 +260,10 @@ GstClockTime gst_harness_query_latency (GstHarness * h);
 GST_CHECK_API
 void         gst_harness_set_upstream_latency (GstHarness * h, GstClockTime latency);
 
-/* allocator and allocation params */
+GST_CHECK_API
+void         gst_harness_set_live (GstHarness * h, gboolean is_live);
+
+/* allocation query parameters */
 
 GST_CHECK_API
 void         gst_harness_set_propose_allocator (GstHarness                * h,
@@ -268,6 +274,11 @@ GST_CHECK_API
 void         gst_harness_get_allocator         (GstHarness          * h,
                                                 GstAllocator       ** allocator,
                                                 GstAllocationParams * params);
+
+GST_CHECK_API
+void         gst_harness_add_propose_allocation_meta (GstHarness                * h,
+                                                      GType                       api,
+                                                      const GstStructure        * params);
 
 /* src-harness */
 
@@ -326,12 +337,12 @@ GstElement *  gst_harness_find_element (GstHarness * h,
 GST_CHECK_API
 void          gst_harness_set (GstHarness  * h,
                                const gchar * element_name,
-                               const gchar * first_property_name, ...);
+                               const gchar * first_property_name, ...) G_GNUC_NULL_TERMINATED;
 
 GST_CHECK_API
 void          gst_harness_get (GstHarness  * h,
                                const gchar * element_name,
-                               const gchar * first_property_name, ...);
+                               const gchar * first_property_name, ...) G_GNUC_NULL_TERMINATED;
 
 GST_CHECK_API
 void          gst_harness_add_probe (GstHarness        * h,

@@ -27,6 +27,8 @@
 #define GST_BIT_WRITER_DISABLE_INLINES
 #include "gstbitwriter.h"
 
+#include "gst/glib-compat-private.h"
+
 /**
  * SECTION:gstbitwriter
  * @title: GstBitWriter
@@ -38,7 +40,7 @@
  */
 
 /**
- * gst_bit_writer_new:
+ * gst_bit_writer_new: (skip)
  *
  * Creates a new, empty #GstBitWriter instance.
  *
@@ -57,7 +59,7 @@ gst_bit_writer_new (void)
 }
 
 /**
- * gst_bit_writer_new_size:
+ * gst_bit_writer_new_with_size: (skip)
  * @size: Initial size of data in bytes
  * @fixed: If %TRUE the data can't be reallocated
  *
@@ -77,14 +79,14 @@ gst_bit_writer_new_with_size (guint size, gboolean fixed)
 }
 
 /**
- * gst_bit_writer_new_with_data:
+ * gst_bit_writer_new_with_data: (skip)
  * @data: Memory area for writing
  * @size: Size of @data in bytes
  * @initialized: if %TRUE the complete data can be read from the beginning
  *
  * Creates a new #GstBitWriter instance with the given memory area. If
  * @initialized is %TRUE it is possible to read @size bits from the
- * #GstBitWriter from the beginnig.
+ * #GstBitWriter from the beginning.
  *
  * Free-function: gst_bit_writer_free
  *
@@ -101,7 +103,7 @@ gst_bit_writer_new_with_data (guint8 * data, guint size, gboolean initialized)
 }
 
 /**
- * gst_bit_writer_init:
+ * gst_bit_writer_init: (skip)
  * @bitwriter: #GstBitWriter instance
  *
  * Initializes @bitwriter to an empty instance.
@@ -117,7 +119,7 @@ gst_bit_writer_init (GstBitWriter * bitwriter)
 }
 
 /**
- * gst_bit_writer_init_with_size:
+ * gst_bit_writer_init_with_size: (skip)
  * @bitwriter: #GstBitWriter instance
  * @size: the size on bytes to allocate for data
  * @fixed: If %TRUE the data can't be reallocated
@@ -139,7 +141,7 @@ gst_bit_writer_init_with_size (GstBitWriter * bitwriter, guint size,
 }
 
 /**
- * gst_bit_writer_init_with_data:
+ * gst_bit_writer_init_with_data: (skip)
  * @bitwriter: #GstBitWriter instance
  * @data: (array length=size) (transfer none): Memory area for writing
  * @size: Size of @data in bytes
@@ -200,7 +202,7 @@ gst_bit_writer_reset_and_get_data (GstBitWriter * bitwriter)
 
   data = bitwriter->data;
   if (bitwriter->owned)
-    data = g_memdup (data, bitwriter->bit_size >> 3);
+    data = g_memdup2 (data, bitwriter->bit_size >> 3);
   gst_bit_writer_reset (bitwriter);
 
   return data;
@@ -232,7 +234,7 @@ gst_bit_writer_reset_and_get_buffer (GstBitWriter * bitwriter)
   /* we cannot rely on buffers allocated externally, thus let's dup
    * the data */
   if (data && !bitwriter->owned)
-    data = g_memdup (data, size);
+    data = g_memdup2 (data, size);
 
   buffer = gst_buffer_new ();
   if (data != NULL) {
@@ -341,7 +343,7 @@ gst_bit_writer_get_data (const GstBitWriter * bitwriter)
  * @bitwriter: a #GstBitWriter instance
  * @pos: The new position in bits
  *
- * Set the new postion of data end which should be the new size of @data.
+ * Set the new position of data end which should be the new size of @data.
  *
  * Returns: %TRUE if successful, %FALSE otherwise
  */

@@ -135,7 +135,7 @@ test_transform_func (GstBuffer * transbuf, GstMeta * meta,
 static GType
 gst_meta_test_api_get_type (void)
 {
-  static volatile GType type;
+  static GType type;
   static const gchar *tags[] = { "timing", NULL };
 
   if (g_once_init_enter (&type)) {
@@ -182,7 +182,7 @@ foo_transform_func (GstBuffer * transbuf, GstMeta * meta,
       g_quark_to_string (type), buffer, transbuf, meta);
 
   if (GST_META_TRANSFORM_IS_COPY (type)) {
-    GST_META_FOO_ADD (transbuf);
+    G_GNUC_UNUSED GstMetaFoo *unused = GST_META_FOO_ADD (transbuf);
   } else {
     /* return FALSE, if transform type is not supported */
     return FALSE;
@@ -193,7 +193,7 @@ foo_transform_func (GstBuffer * transbuf, GstMeta * meta,
 static GType
 gst_meta_foo_api_get_type (void)
 {
-  static volatile GType type;
+  static GType type;
   static const gchar *tags[] = { NULL };
 
   if (g_once_init_enter (&type)) {
@@ -337,10 +337,98 @@ count_buffer_meta (GstBuffer * buffer)
   return ret;
 }
 
-GST_START_TEST (test_meta_foreach_remove_one)
+GST_START_TEST (test_meta_foreach_remove_one_of_one)
+{
+  GstBuffer *buffer;
+  GstMetaTest *meta1;
+  gpointer state = NULL;
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_if (buffer == NULL);
+
+  /* add some metadata */
+  meta1 = GST_META_TEST_ADD (buffer);
+  fail_if (meta1 == NULL);
+
+  fail_unless_equals_int (count_buffer_meta (buffer), 1);
+
+  gst_buffer_foreach_meta (buffer, foreach_meta_remove_one, meta1);
+
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == NULL);
+
+  /* clean up */
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_meta_foreach_remove_head_of_three)
 {
   GstBuffer *buffer;
   GstMetaTest *meta1, *meta2, *meta3;
+  gpointer state = NULL;
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_if (buffer == NULL);
+
+  /* add some metadata */
+  meta1 = GST_META_TEST_ADD (buffer);
+  fail_if (meta1 == NULL);
+  meta2 = GST_META_TEST_ADD (buffer);
+  fail_if (meta2 == NULL);
+  meta3 = GST_META_TEST_ADD (buffer);
+  fail_if (meta3 == NULL);
+
+  fail_unless_equals_int (count_buffer_meta (buffer), 3);
+
+  gst_buffer_foreach_meta (buffer, foreach_meta_remove_one, meta3);
+
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta1);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta2);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == NULL);
+
+  /* clean up */
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_meta_foreach_remove_middle_of_three)
+{
+  GstBuffer *buffer;
+  GstMetaTest *meta1, *meta2, *meta3;
+  gpointer state = NULL;
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_if (buffer == NULL);
+
+  /* add some metadata */
+  meta1 = GST_META_TEST_ADD (buffer);
+  fail_if (meta1 == NULL);
+  meta2 = GST_META_TEST_ADD (buffer);
+  fail_if (meta2 == NULL);
+  meta3 = GST_META_TEST_ADD (buffer);
+  fail_if (meta3 == NULL);
+
+  fail_unless_equals_int (count_buffer_meta (buffer), 3);
+
+  gst_buffer_foreach_meta (buffer, foreach_meta_remove_one, meta2);
+
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta1);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta3);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == NULL);
+
+  /* clean up */
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_meta_foreach_remove_tail_of_three)
+{
+  GstBuffer *buffer;
+  GstMetaTest *meta1, *meta2, *meta3;
+  gpointer state = NULL;
 
   buffer = gst_buffer_new_and_alloc (4);
   fail_if (buffer == NULL);
@@ -357,7 +445,89 @@ GST_START_TEST (test_meta_foreach_remove_one)
 
   gst_buffer_foreach_meta (buffer, foreach_meta_remove_one, meta1);
 
-  fail_unless_equals_int (count_buffer_meta (buffer), 2);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta2);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta3);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == NULL);
+
+  /* clean up */
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+static gboolean
+foreach_meta_remove_unpooled (GstBuffer * buffer, GstMeta ** meta,
+    gpointer unused)
+{
+  if (!GST_META_FLAG_IS_SET (*meta, GST_META_FLAG_POOLED)) {
+    *meta = NULL;
+  }
+
+  return TRUE;
+}
+
+GST_START_TEST (test_meta_foreach_remove_head_and_tail_of_three)
+{
+  GstBuffer *buffer;
+  GstMetaTest *meta1, *meta2, *meta3;
+  gpointer state = NULL;
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_if (buffer == NULL);
+
+  /* add some metadata */
+  meta1 = GST_META_TEST_ADD (buffer);
+  fail_if (meta1 == NULL);
+  meta2 = GST_META_TEST_ADD (buffer);
+  fail_if (meta2 == NULL);
+  GST_META_FLAG_SET (meta2, GST_META_FLAG_POOLED);
+  meta3 = GST_META_TEST_ADD (buffer);
+  fail_if (meta3 == NULL);
+
+  fail_unless_equals_int (count_buffer_meta (buffer), 3);
+
+  gst_buffer_foreach_meta (buffer, foreach_meta_remove_unpooled, NULL);
+
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta2);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == NULL);
+
+  /* clean up */
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+
+GST_START_TEST (test_meta_foreach_remove_several)
+{
+  GstBuffer *buffer;
+  GstMetaTest *meta1, *meta2, *meta3, *meta4, *meta5;
+  gpointer state = NULL;
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_if (buffer == NULL);
+
+  /* add some metadata */
+  meta1 = GST_META_TEST_ADD (buffer);
+  fail_if (meta1 == NULL);
+  meta2 = GST_META_TEST_ADD (buffer);
+  fail_if (meta2 == NULL);
+  GST_META_FLAG_SET (meta2, GST_META_FLAG_POOLED);
+  meta3 = GST_META_TEST_ADD (buffer);
+  fail_if (meta3 == NULL);
+  meta4 = GST_META_TEST_ADD (buffer);
+  fail_if (meta4 == NULL);
+  meta5 = GST_META_TEST_ADD (buffer);
+  fail_if (meta5 == NULL);
+  GST_META_FLAG_SET (meta5, GST_META_FLAG_POOLED);
+
+  fail_unless_equals_int (count_buffer_meta (buffer), 5);
+
+  gst_buffer_foreach_meta (buffer, foreach_meta_remove_unpooled, NULL);
+
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta2);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == (GstMeta *) meta5);
+  fail_unless (gst_buffer_iterate_meta (buffer, &state) == NULL);
 
   /* clean up */
   gst_buffer_unref (buffer);
@@ -463,6 +633,170 @@ GST_START_TEST (test_meta_iterate)
 
 GST_END_TEST;
 
+#define test_meta_compare_seqnum(a,b) \
+    gst_meta_compare_seqnum((GstMeta*)(a),(GstMeta*)(b))
+
+GST_START_TEST (test_meta_seqnum)
+{
+  GstMetaTest *meta1, *meta2, *meta3;
+  GstBuffer *buffer;
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_unless (buffer != NULL);
+
+  /* add some metadata */
+  meta1 = GST_META_TEST_ADD (buffer);
+  fail_unless (meta1 != NULL);
+  meta2 = GST_META_TEST_ADD (buffer);
+  fail_unless (meta2 != NULL);
+  meta3 = GST_META_TEST_ADD (buffer);
+  fail_unless (meta3 != NULL);
+
+  fail_unless (test_meta_compare_seqnum (meta1, meta2) < 0);
+  fail_unless (test_meta_compare_seqnum (meta2, meta3) < 0);
+  fail_unless (test_meta_compare_seqnum (meta1, meta3) < 0);
+
+  fail_unless_equals_int (test_meta_compare_seqnum (meta1, meta1), 0);
+  fail_unless_equals_int (test_meta_compare_seqnum (meta2, meta2), 0);
+  fail_unless_equals_int (test_meta_compare_seqnum (meta3, meta3), 0);
+
+  fail_unless (test_meta_compare_seqnum (meta2, meta1) > 0);
+  fail_unless (test_meta_compare_seqnum (meta3, meta2) > 0);
+  fail_unless (test_meta_compare_seqnum (meta3, meta1) > 0);
+
+  /* Check that gst_meta_compare_seqnum() works correctly as a GCompareFunc */
+  {
+    GList *list;
+
+    /* Make list: 3, 1, 2 */
+    list = g_list_prepend (NULL, meta2);
+    list = g_list_prepend (list, meta1);
+    list = g_list_prepend (list, meta3);
+
+    list = g_list_sort (list, (GCompareFunc) gst_meta_compare_seqnum);
+
+    fail_unless (g_list_nth_data (list, 0) == meta1);
+    fail_unless (g_list_nth_data (list, 1) == meta2);
+    fail_unless (g_list_nth_data (list, 2) == meta3);
+
+    g_list_free (list);
+  }
+
+  /* clean up */
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_meta_custom)
+{
+  GstBuffer *buffer;
+  const GstMetaInfo *info;
+  GstCustomMeta *meta;
+  GstMeta *it;
+  GstStructure *s, *expected;
+  gpointer state = NULL;
+  const gchar *tags[] = { "test-tag", NULL };
+
+  info = gst_meta_register_custom ("test-custom", tags, NULL, NULL, NULL);
+
+  fail_unless (info != NULL);
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_if (buffer == NULL);
+
+  /* add some metadata */
+  meta = gst_buffer_add_custom_meta (buffer, "test-custom");
+  fail_if (meta == NULL);
+
+  fail_unless (gst_custom_meta_has_name ((GstCustomMeta *) meta,
+          "test-custom"));
+
+  expected = gst_structure_new_empty ("test-custom");
+  s = gst_custom_meta_get_structure (meta);
+  fail_unless (gst_structure_is_equal (s, expected));
+  gst_structure_free (expected);
+
+  gst_structure_set (s, "test-field", G_TYPE_INT, 42, NULL);
+  gst_buffer_ref (buffer);
+  ASSERT_CRITICAL (gst_structure_set (s, "test-field", G_TYPE_INT, 43, NULL));
+  gst_buffer_unref (buffer);
+  expected = gst_structure_new ("test-custom",
+      "test-field", G_TYPE_INT, 42, NULL);
+  fail_unless (gst_structure_is_equal (s, expected));
+  gst_structure_free (expected);
+
+  it = gst_buffer_iterate_meta (buffer, &state);
+
+  fail_unless ((GstCustomMeta *) it == meta);
+
+  fail_unless (it->info == info);
+
+  /* clean up */
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+static gboolean
+transform_custom (GstBuffer * transbuf, GstMeta * meta, GstBuffer * buffer,
+    GQuark type, gpointer data, gint * user_data)
+{
+  if (GST_META_TRANSFORM_IS_COPY (type)) {
+    GstStructure *s;
+    GstCustomMeta *custom;
+
+    custom = (GstCustomMeta *) gst_buffer_add_meta (transbuf, meta->info, NULL);
+    s = gst_custom_meta_get_structure (custom);
+    gst_structure_set (s, "test-field", G_TYPE_INT, *user_data, NULL);
+  } else {
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+GST_START_TEST (test_meta_custom_transform)
+{
+  GstBuffer *buffer, *buffer_copy;
+  const GstMetaInfo *info;
+  GstCustomMeta *meta;
+  GstStructure *s, *expected;
+  const gchar *tags[] = { "test-tag", NULL };
+  gint *user_data;
+
+  /* That memory should be deallocated at gst_deinit time */
+  user_data = g_malloc (sizeof (gint));
+  *user_data = 42;
+  info =
+      gst_meta_register_custom ("test-custom", tags,
+      (GstCustomMetaTransformFunction) transform_custom, user_data, g_free);
+
+  fail_unless (info != NULL);
+
+  buffer = gst_buffer_new_and_alloc (4);
+  fail_if (buffer == NULL);
+
+  /* add some metadata */
+  meta = gst_buffer_add_custom_meta (buffer, "test-custom");
+  fail_if (meta == NULL);
+
+  buffer_copy = gst_buffer_copy (buffer);
+  meta = gst_buffer_get_custom_meta (buffer_copy, "test-custom");
+  fail_unless (meta != NULL);
+  expected =
+      gst_structure_new ("test-custom", "test-field", G_TYPE_INT, 42, NULL);
+  s = gst_custom_meta_get_structure (meta);
+  fail_unless (gst_structure_is_equal (s, expected));
+  gst_structure_free (expected);
+
+  /* clean up */
+  gst_buffer_unref (buffer_copy);
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_buffermeta_suite (void)
 {
@@ -472,8 +806,16 @@ gst_buffermeta_suite (void)
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_meta_test);
   tcase_add_test (tc_chain, test_meta_locked);
-  tcase_add_test (tc_chain, test_meta_foreach_remove_one);
+  tcase_add_test (tc_chain, test_meta_foreach_remove_one_of_one);
+  tcase_add_test (tc_chain, test_meta_foreach_remove_head_of_three);
+  tcase_add_test (tc_chain, test_meta_foreach_remove_middle_of_three);
+  tcase_add_test (tc_chain, test_meta_foreach_remove_tail_of_three);
+  tcase_add_test (tc_chain, test_meta_foreach_remove_head_and_tail_of_three);
+  tcase_add_test (tc_chain, test_meta_foreach_remove_several);
   tcase_add_test (tc_chain, test_meta_iterate);
+  tcase_add_test (tc_chain, test_meta_seqnum);
+  tcase_add_test (tc_chain, test_meta_custom);
+  tcase_add_test (tc_chain, test_meta_custom_transform);
 
   return s;
 }

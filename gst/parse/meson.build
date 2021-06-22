@@ -6,12 +6,9 @@ flex_cdata = configuration_data()
 flex_min_version='2.5.31'
 flex = find_program('flex', 'win_flex')
 
-flexversion_res = run_command([flex, '--version'])
-if flexversion_res.returncode() != 0
-  error('Could not get flex version (@0@)'.format(flexversion_res.stderr()))
-endif
-
-flexversion = flexversion_res.stdout().split('\n')[0].split(' ')[1].strip()
+get_flex_version = find_program('get_flex_version.py')
+flexversion_res = run_command([get_flex_version, flex], check: true)
+flexversion = flexversion_res.stdout().strip()
 if flexversion.version_compare('<' + flex_min_version)
   error('flex version @0@ >= @1@: NO'.format(flexversion, flex_min_version))
 else
@@ -30,6 +27,7 @@ gen_lex = configure_file(input : 'gen_lex.py.in',
   configuration : flex_cdata)
 
 # Find bison, configure grammar generator
+bison_parser_cdata = configuration_data()
 bison_cdata = configuration_data()
 
 bison_min_version='2.4'
@@ -47,7 +45,15 @@ else
   message('bison version @0@ >= @1@: YES'.format(bversion, bison_min_version))
 endif
 
+if bversion.version_compare('>' + '2.5')
+  bison_parser_cdata.set('BISON_PURE_PARSER', '%define api.pure full')
+else
+  bison_parser_cdata.set('BISON_PURE_PARSER', '%pure-parser')
+endif
 
+gen_grammar_file = configure_file(input : 'grammar.y.in',
+  output : 'grammar.y',
+  configuration : bison_parser_cdata)
 
 bison_cdata.set('BISON', bison.path())
 bison_cdata.set('BISON_ARGS', '')
@@ -64,7 +70,7 @@ parser = custom_target('parselex',
 )
 
 grammar = custom_target('parsegrammar',
-  input : 'grammar.y',
+  input : gen_grammar_file,
   output : ['grammar.tab.c', 'grammar.tab.h'],
   command : [python3, gen_grammar, '@OUTPUT0@', '@OUTPUT1@', '@INPUT@'],
   depends : [parser],

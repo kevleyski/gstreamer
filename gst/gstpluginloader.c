@@ -171,8 +171,11 @@ plugin_loader_free (GstPluginLoader * loader)
 {
   GList *cur;
   gboolean got_plugin_details;
+  gint fsync_ret;
 
-  fsync (loader->fd_w.fd);
+  do {
+    fsync_ret = fsync (loader->fd_w.fd);
+  } while (fsync_ret < 0 && errno == EINTR);
 
   if (loader->child_running) {
     put_packet (loader, PACKET_EXIT, 0, NULL, 0);
@@ -378,7 +381,7 @@ plugin_loader_create_blacklist_plugin (GstPluginLoader * l,
 static gboolean
 gst_plugin_loader_use_usr_bin_arch (void)
 {
-  static volatile gsize multiarch = 0;
+  static gsize multiarch = 0;
 
   if (g_once_init_enter (&multiarch)) {
     gsize res = NO_MULTIARCH;
@@ -461,20 +464,19 @@ gst_plugin_loader_spawn (GstPluginLoader * loader)
   if (loader->child_running)
     return TRUE;
 
-  /* Find the gst-plugin-scanner: first try the env-var if it is set,
-   * otherwise use the installed version */
+  /* Find the gst-plugin-scanner */
   env = g_getenv ("GST_PLUGIN_SCANNER_1_0");
   if (env == NULL)
     env = g_getenv ("GST_PLUGIN_SCANNER");
 
   if (env != NULL && *env != '\0') {
+    /* use the env-var if it is set */
     GST_LOG ("Trying GST_PLUGIN_SCANNER env var: %s", env);
     helper_bin = g_strdup (env);
     res = gst_plugin_loader_try_helper (loader, helper_bin);
     g_free (helper_bin);
-  }
-
-  if (!res) {
+  } else {
+    /* use the installed version */
     GST_LOG ("Trying installed plugin scanner");
 
 #ifdef G_OS_WIN32
@@ -494,10 +496,10 @@ gst_plugin_loader_spawn (GstPluginLoader * loader)
 #endif
     res = gst_plugin_loader_try_helper (loader, helper_bin);
     g_free (helper_bin);
+  }
 
-    if (!res) {
-      GST_INFO ("No gst-plugin-scanner available, or not working");
-    }
+  if (!res) {
+    GST_INFO ("No gst-plugin-scanner available, or not working");
   }
 
   return loader->child_running;

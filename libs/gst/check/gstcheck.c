@@ -125,7 +125,7 @@ gst_check_free_log_filter (GstCheckLogFilter * filter)
 
 
 /**
- * gst_check_add_log_filter:
+ * gst_check_add_log_filter: (skip)
  * @log_domain: the log domain of the message
  * @log_level: the log level of the message
  * @regex: (transfer full): a #GRegex to match the message
@@ -434,6 +434,12 @@ gst_check_message_error (GstMessage * message, GstMessageType type,
 }
 
 /* helper functions */
+/**
+ * gst_check_chain_func:
+ *
+ * A fake chain function that appends the buffer to the internal list of
+ * buffers.
+ */
 GstFlowReturn
 gst_check_chain_func (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
@@ -590,14 +596,12 @@ gst_check_setup_src_pad_by_name_from_template (GstElement * element,
 
   sinkpad = gst_element_get_static_pad (element, name);
   if (sinkpad == NULL)
-    sinkpad = gst_element_get_request_pad (element, name);
+    sinkpad = gst_element_request_pad_simple (element, name);
   fail_if (sinkpad == NULL, "Could not get sink pad from %s",
       GST_ELEMENT_NAME (element));
-  ASSERT_OBJECT_REFCOUNT (sinkpad, "sinkpad", 2);
   fail_unless (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK,
       "Could not link source and %s sink pads", GST_ELEMENT_NAME (element));
   gst_object_unref (sinkpad);   /* because we got it higher up */
-  ASSERT_OBJECT_REFCOUNT (sinkpad, "sinkpad", 1);
 
   return srcpad;
 }
@@ -622,14 +626,9 @@ gst_check_teardown_pad_by_name (GstElement * element, const gchar * name)
       gst_pad_unlink (pad_element, pad_peer);
   }
 
-  /* pad refs held by both creator and this function (through _get) */
-  ASSERT_OBJECT_REFCOUNT (pad_element, "element pad_element", 2);
   gst_object_unref (pad_element);
-  /* one more ref is held by element itself */
 
   if (pad_peer) {
-    /* pad refs held by both creator and this function (through _get_peer) */
-    ASSERT_OBJECT_REFCOUNT (pad_peer, "check pad_peer", 2);
     gst_object_unref (pad_peer);
     gst_object_unref (pad_peer);
   }
@@ -722,7 +721,7 @@ gst_check_setup_sink_pad_by_name_from_template (GstElement * element,
 
   srcpad = gst_element_get_static_pad (element, name);
   if (srcpad == NULL)
-    srcpad = gst_element_get_request_pad (element, name);
+    srcpad = gst_element_request_pad_simple (element, name);
   fail_if (srcpad == NULL, "Could not get source pad from %s",
       GST_ELEMENT_NAME (element));
   gst_pad_set_chain_function (sinkpad, gst_check_chain_func);
@@ -731,9 +730,8 @@ gst_check_setup_sink_pad_by_name_from_template (GstElement * element,
   fail_unless (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK,
       "Could not link %s source and sink pads", GST_ELEMENT_NAME (element));
   gst_object_unref (srcpad);    /* because we got it higher up */
-  ASSERT_OBJECT_REFCOUNT (srcpad, "srcpad", 1);
 
-  GST_DEBUG_OBJECT (element, "set up srcpad, refcount is 1");
+  GST_DEBUG_OBJECT (element, "set up srcpad");
   return sinkpad;
 }
 
@@ -795,6 +793,10 @@ gst_check_buffer_data (GstBuffer * buffer, gconstpointer data, gsize size)
   fail_unless (gst_buffer_map (buffer, &info, GST_MAP_READ));
   GST_MEMDUMP ("Converted data", info.data, info.size);
   GST_MEMDUMP ("Expected data", data, size);
+  if (info.size != size) {
+    fail ("buffer sizes not equal: expected %" G_GSIZE_FORMAT " got %"
+        G_GSIZE_FORMAT, size, info.size);
+  }
   if (memcmp (info.data, data, size) != 0) {
     g_print ("\nConverted data:\n");
     gst_util_dump_mem (info.data, info.size);
@@ -1001,6 +1003,15 @@ gst_check_element_push_buffer (const gchar * element_name,
       GST_FLOW_OK);
 }
 
+/**
+ * gst_check_abi_list:
+ * @list: A list of GstCheckABIStruct to be verified
+ * @have_abi_sizes: Whether there is a reference ABI size already specified,
+ * if it is %FALSE and the `GST_ABI` environment variable is set, usable code
+ * for @list will be printed.
+ *
+ * Verifies that reference values and current values are equals in @list.
+ */
 void
 gst_check_abi_list (GstCheckABIStruct list[], gboolean have_abi_sizes)
 {
@@ -1046,6 +1057,14 @@ gst_check_abi_list (GstCheckABIStruct list[], gboolean have_abi_sizes)
   }
 }
 
+/**
+ * gst_check_run_suite: (skip)
+ * @suite: the check test suite
+ * @name: name
+ * @fname: file name
+ *
+ * Returns: number of failed tests
+ */
 gint
 gst_check_run_suite (Suite * suite, const gchar * name, const gchar * fname)
 {
@@ -1071,6 +1090,7 @@ gst_check_run_suite (Suite * suite, const gchar * name, const gchar * fname)
   g_timer_destroy (timer);
   g_free (xmlfilename);
   srunner_free (sr);
+  g_thread_pool_stop_unused_threads ();
   return nf;
 }
 
@@ -1194,7 +1214,7 @@ weak_notify (DestroyedObjectStruct * destroyed, GObject ** object)
  *
  * Unrefs @object_to_unref and checks that is has properly been
  * destroyed, also checks that the other objects passed in
- * parametter have been destroyed as a concequence of
+ * parameter have been destroyed as a concequence of
  * unrefing @object_to_unref. Last variable argument should be NULL.
  *
  * Since: 1.6

@@ -675,6 +675,19 @@ GST_START_TEST (segment_seek_noupdate)
   fail_unless_equals_uint64 (segment.position, 50);
   fail_unless_equals_uint64 (segment.base, 0);
   fail_unless_equals_uint64 (segment.offset, 50);
+
+  /* FALSE should be returned when GST_SEEK_FLAG_INSTANT_RATE_CHANGE */
+  fail_unless (gst_segment_do_seek (&segment, 1.5,
+          GST_FORMAT_TIME,
+          GST_SEEK_FLAG_INSTANT_RATE_CHANGE,
+          GST_SEEK_TYPE_NONE, 0, GST_SEEK_TYPE_NONE, 0, NULL) == FALSE);
+  fail_unless (segment.format == GST_FORMAT_TIME);
+  fail_unless_equals_uint64 (segment.start, 0);
+  fail_unless_equals_uint64 (segment.stop, 200);
+  fail_unless_equals_uint64 (segment.time, 0);
+  fail_unless_equals_uint64 (segment.position, 50);
+  fail_unless_equals_uint64 (segment.base, 0);
+  fail_unless_equals_uint64 (segment.offset, 50);
 }
 
 GST_END_TEST;
@@ -977,6 +990,21 @@ GST_START_TEST (segment_full)
   fail_unless (gst_segment_position_from_running_time_full (&segment,
           GST_FORMAT_TIME, 75, &pos) == -1);
   fail_unless (pos == 300);     /* Actually -300 */
+
+  /* Test for running time conversion with stop == -1, where
+   * calculations should use the duration instead */
+  segment.rate = -2.0;
+  segment.start = 100;
+  segment.offset = 0;
+  segment.stop = -1;
+  segment.duration = 200;
+  segment.position = 40;
+  segment.base = 100;
+  segment.time = 10000;
+
+  fail_unless (gst_segment_to_running_time_full (&segment, GST_FORMAT_TIME,
+          150, &rt) == 1);
+  fail_unless (rt == 175);
 }
 
 GST_END_TEST;

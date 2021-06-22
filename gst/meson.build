@@ -180,6 +180,10 @@ else
   gst_cdata.set('GST_DISABLE_PARSE_DEFINE', '#define GST_DISABLE_PARSE 1')
 endif
 
+gst_cdata.set10('GST_DISABLE_CAST_CHECKS_DEFINE', cast_checks.disabled())
+gst_cdata.set10('GST_DISABLE_GLIB_ASSERTS_DEFINE', glib_asserts.disabled())
+gst_cdata.set10('GST_DISABLE_GLIB_CHECKS_DEFINE', glib_checks.disabled())
+
 # FIXME: add --disable-plugin option?
 gst_cdata.set('GST_DISABLE_PLUGIN_DEFINE', '#undef GST_DISABLE_PLUGIN')
 
@@ -233,6 +237,7 @@ gst_incdirs = [configinc]
 gst_gen_sources = [gstenum_h]
 libgst = library('gstreamer-1.0', gst_sources,
   gstenum_h, gstenum_c, gst_parse_sources, gst_registry_sources,
+  objects : printf_lib.extract_all_objects(),
   version : libversion,
   soversion : soversion,
   darwin_versions : osxversion,
@@ -240,25 +245,34 @@ libgst = library('gstreamer-1.0', gst_sources,
   include_directories : [configinc,
     # HACK, change include paths in .y and .l in final version.
     include_directories('parse')],
-  link_with : printf_lib,
   install : true,
   dependencies : [gobject_dep, gmodule_dep, glib_dep, mathlib, dl_dep] + backtrace_deps
                    + platform_deps,
 )
 
+pkgconfig.generate(libgst,
+  libraries : [glib_dep, gobject_dep],
+  variables : pkgconfig_variables,
+  uninstalled_variables: pkgconfig_uninstalled_variables,
+  subdirs : pkgconfig_subdirs,
+  name : 'gstreamer-1.0',
+  description : 'Streaming media framework',
+)
+
 if build_gir
-  gst_gir_extra_args = gir_init_section + [ '--c-include=gst/gst.h' ]
+  gst_gir_extra_args = gir_init_section + ['--c-include=gst/gst.h']
   if meson.is_subproject()
     # FIXME: There must be a better way to do this
     # Need to pass the include path to find gst/gst.h and gst/gstenumtypes.h (built)
     gst_gir_extra_args += ['--cflags-begin',
       '-I' + meson.current_source_dir() + '/..',
       '-I' + meson.current_build_dir() + '/..',
+      '-DGST_DISABLE_MINIOBJECT_INLINE_FUNCTIONS',
       '--cflags-end']
   endif
 
   gst_incdirs += [configinc]
-  gst_gen_sources += [gnome.generate_gir(libgst,
+  gst_gir = gnome.generate_gir(libgst,
     sources : gst_sources + gst_headers + gst_enums + [gst_version_h],
     namespace : 'Gst',
     nsversion : apiversion,
@@ -268,12 +282,21 @@ if build_gir
     includes : ['GLib-2.0', 'GObject-2.0', 'GModule-2.0' ],
     install : true,
     extra_args : gst_gir_extra_args,
-  )]
+  )
+  gst_gen_sources += gst_gir
+endif
+
+gst_compile_args = []
+if get_option('default_library') == 'static'
+  gst_compile_args += ['-DGST_STATIC_COMPILATION']
 endif
 
 gst_dep = declare_dependency(link_with : libgst,
+  compile_args : gst_compile_args,
   include_directories : gst_incdirs,
   dependencies : [glib_dep, gobject_dep, gmodule_dep],
   # Everything that uses libgst needs this built to compile
   sources : gst_gen_sources,
 )
+
+meson.override_dependency('gstreamer-1.0', gst_dep)

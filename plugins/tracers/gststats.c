@@ -19,7 +19,7 @@
  * Boston, MA 02110-1301, USA.
  */
 /**
- * SECTION:element-statstracer
+ * SECTION:tracer-stats
  * @short_description: log event stats
  *
  * A tracing module that builds usage statistic for elements and pads.
@@ -521,8 +521,38 @@ do_query_post (GstStatsTracer * self, guint64 ts, GstPad * this_pad,
 /* tracer class */
 
 static void
+gst_stats_tracer_constructed (GObject * object)
+{
+  GstStatsTracer *self = GST_STATS_TRACER (object);
+  gchar *params, *tmp;
+  const gchar *name;
+  GstStructure *params_struct = NULL;
+
+  g_object_get (self, "params", &params, NULL);
+
+  if (!params)
+    return;
+
+  tmp = g_strdup_printf ("stats,%s", params);
+  params_struct = gst_structure_from_string (tmp, NULL);
+  g_free (tmp);
+  if (!params_struct)
+    return;
+
+  /* Set the name if assigned */
+  name = gst_structure_get_string (params_struct, "name");
+  if (name)
+    gst_object_set_name (GST_OBJECT (self), name);
+  gst_structure_free (params_struct);
+}
+
+static void
 gst_stats_tracer_class_init (GstStatsTracerClass * klass)
 {
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+
+  gobject_class->constructed = gst_stats_tracer_constructed;
+
   /* announce trace formats */
   /* *INDENT-OFF* */
   tr_buffer = gst_tracer_record_new ("buffer.class",
@@ -744,6 +774,14 @@ gst_stats_tracer_class_init (GstStatsTracerClass * klass)
           NULL),
       NULL);
   /* *INDENT-ON* */
+
+  GST_OBJECT_FLAG_SET (tr_buffer, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_OBJECT_FLAG_SET (tr_event, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_OBJECT_FLAG_SET (tr_message, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_OBJECT_FLAG_SET (tr_element_query, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_OBJECT_FLAG_SET (tr_query, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_OBJECT_FLAG_SET (tr_new_element, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_OBJECT_FLAG_SET (tr_new_pad, GST_OBJECT_FLAG_MAY_BE_LEAKED);
 }
 
 static void

@@ -153,6 +153,82 @@ GST_START_TEST (test_interface)
 
 GST_END_TEST;
 
+GST_START_TEST (test_iterate_all_by_element_factory_name)
+{
+  GstBin *bin, *bin2;
+  GstElement *filesrc;
+  GstIterator *it;
+  GValue item = { 0, };
+
+  bin = GST_BIN (gst_bin_new (NULL));
+  fail_unless (bin != NULL, "Could not create bin");
+
+  filesrc = gst_element_factory_make ("filesrc", NULL);
+  fail_unless (filesrc != NULL, "Could not create filesrc");
+  gst_bin_add (bin, filesrc);
+
+  /* Test bin with single element */
+  it = gst_bin_iterate_all_by_element_factory_name (bin, "filesrc");
+  fail_unless (it != NULL);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_OK);
+  fail_unless (g_value_get_object (&item) == (gpointer) filesrc);
+  g_value_reset (&item);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_DONE);
+  gst_iterator_free (it);
+
+  /* Negative test bin with single element */
+  it = gst_bin_iterate_all_by_element_factory_name (bin, "filesink");
+  fail_unless (it != NULL);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_DONE);
+  gst_iterator_free (it);
+
+  /* Test bin with multiple other elements, 1 layer */
+  gst_bin_add_many (bin,
+      gst_element_factory_make ("identity", NULL),
+      gst_element_factory_make ("identity", NULL),
+      gst_element_factory_make ("identity", NULL), NULL);
+  it = gst_bin_iterate_all_by_element_factory_name (bin, "filesrc");
+  fail_unless (it != NULL);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_OK);
+  fail_unless (g_value_get_object (&item) == (gpointer) filesrc);
+  g_value_reset (&item);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_DONE);
+  gst_iterator_free (it);
+
+  /* Test bin with multiple other elements in subbins */
+  bin2 = bin;
+  bin = GST_BIN (gst_bin_new (NULL));
+  fail_unless (bin != NULL);
+  gst_bin_add_many (bin,
+      gst_element_factory_make ("identity", NULL),
+      gst_element_factory_make ("identity", NULL),
+      GST_ELEMENT (bin2), gst_element_factory_make ("identity", NULL), NULL);
+  it = gst_bin_iterate_all_by_element_factory_name (bin, "filesrc");
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_OK);
+  fail_unless (g_value_get_object (&item) == (gpointer) filesrc);
+  g_value_reset (&item);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_DONE);
+  gst_iterator_free (it);
+
+  /* Test bin with multiple other elements, multiple occurrences in subbins */
+  gst_bin_add (bin, gst_element_factory_make ("filesrc", NULL));
+  gst_bin_add (bin2, gst_element_factory_make ("filesrc", NULL));
+  it = gst_bin_iterate_all_by_element_factory_name (bin, "filesrc");
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_OK);
+  g_value_reset (&item);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_OK);
+  g_value_reset (&item);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_OK);
+  g_value_reset (&item);
+  fail_unless (gst_iterator_next (it, &item) == GST_ITERATOR_DONE);
+  g_value_unset (&item);
+  gst_iterator_free (it);
+
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_eos)
 {
   GstBus *bus;
@@ -204,6 +280,68 @@ GST_START_TEST (test_eos)
   gst_pad_set_active (pad2, FALSE);
   gst_check_teardown_src_pad (sink1);
   gst_check_teardown_src_pad (sink2);
+  gst_object_unref (bus);
+  gst_object_unref (pipeline);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_eos_recheck)
+{
+  GstBus *bus;
+  GstElement *pipeline, *sink1, *sink2;
+  GstMessage *message;
+  GstPad *pad1;
+  GThread *thread1;
+
+  pipeline = gst_pipeline_new ("test_eos_recheck");
+  bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline));
+
+  sink1 = gst_element_factory_make ("fakesink", "sink1");
+  sink2 = gst_element_factory_make ("fakesink", "sink2");
+
+  gst_bin_add_many (GST_BIN (pipeline), sink1, sink2, NULL);
+
+  /* Set async=FALSE so we don't wait for preroll */
+  g_object_set (sink1, "async", FALSE, NULL);
+  g_object_set (sink2, "async", FALSE, NULL);
+
+  pad1 = gst_check_setup_src_pad_by_name (sink1, &srctemplate, "sink");
+
+  gst_pad_set_active (pad1, TRUE);
+
+  fail_if (gst_element_set_state (GST_ELEMENT (pipeline),
+          GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE);
+  fail_unless (gst_element_get_state (GST_ELEMENT (pipeline), NULL, NULL,
+          GST_CLOCK_TIME_NONE) == GST_STATE_CHANGE_SUCCESS);
+
+  /* Send one EOS to sink1 */
+  thread1 = g_thread_new ("thread1", (GThreadFunc) push_one_eos, pad1);
+
+  /* Make sure the EOS message is not sent */
+  message =
+      gst_bus_poll (bus, GST_MESSAGE_ERROR | GST_MESSAGE_EOS, 2 * GST_SECOND);
+  fail_if (message != NULL);
+
+  /* Remove sink2 without it EOSing, which should trigger an EOS re-check */
+  gst_object_ref (sink2);
+  gst_bin_remove (GST_BIN (pipeline), sink2);
+  gst_element_set_state (GST_ELEMENT (sink2), GST_STATE_NULL);
+
+  /* Make sure the EOS message is sent then */
+  message =
+      gst_bus_poll (bus, GST_MESSAGE_ERROR | GST_MESSAGE_EOS, 20 * GST_SECOND);
+  fail_if (message == NULL);
+  fail_unless (GST_MESSAGE_TYPE (message) == GST_MESSAGE_EOS);
+  gst_message_unref (message);
+
+  /* Cleanup */
+  g_thread_join (thread1);
+
+  gst_element_set_state (GST_ELEMENT (pipeline), GST_STATE_NULL);
+  gst_pad_set_active (pad1, FALSE);
+  gst_check_teardown_src_pad (sink1);
+  gst_object_unref (sink2);
   gst_object_unref (bus);
   gst_object_unref (pipeline);
 }
@@ -1704,7 +1842,7 @@ GST_END_TEST;
     expected_flags) \
 G_STMT_START { \
   GstBin *bin = GST_BIN (gst_bin_new ("test-bin")); \
-  GstElement *element = gst_element_factory_make ("identity", "test-i"); \
+  GstElement *element = gst_element_factory_make ("queue", "test-q"); \
   GstElementFlags natural_flags = GST_OBJECT_FLAGS (bin); \
   GST_OBJECT_FLAG_SET (element, element_flags); \
   gst_bin_set_suppressed_flags (bin, suppressed_flags); \
@@ -1789,7 +1927,9 @@ gst_bin_suite (void)
 
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_interface);
+  tcase_add_test (tc_chain, test_iterate_all_by_element_factory_name);
   tcase_add_test (tc_chain, test_eos);
+  tcase_add_test (tc_chain, test_eos_recheck);
   tcase_add_test (tc_chain, test_stream_start);
   tcase_add_test (tc_chain, test_children_state_change_order_flagged_sink);
   tcase_add_test (tc_chain, test_children_state_change_order_semi_sink);

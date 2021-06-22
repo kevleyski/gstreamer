@@ -677,7 +677,7 @@ gst_net_client_internal_clock_thread (gpointer data)
         /* before next sending check if need to change QoS */
         new_qos_dscp = self->qos_dscp;
         if (cur_qos_dscp != new_qos_dscp &&
-            gst_net_utils_set_socket_dscp (socket, new_qos_dscp)) {
+            gst_net_utils_set_socket_tos (socket, new_qos_dscp)) {
           GST_DEBUG_OBJECT (self, "changed QoS DSCP to: %d", new_qos_dscp);
           cur_qos_dscp = new_qos_dscp;
         }
@@ -1415,7 +1415,7 @@ gst_net_client_clock_get_internal_time (GstClock * clock)
  * @remote_port: the port of the remote clock provider
  * @base_time: initial time of the clock
  *
- * Create a new #GstNetClientInternalClock that will report the time
+ * Create a new #GstNetClientClock that will report the time
  * provided by the #GstNetTimeProvider on @remote_address and
  * @remote_port.
  *

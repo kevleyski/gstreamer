@@ -923,7 +923,7 @@ gst_test_clock_wait_for_pending_id_count (GstTestClock * test_clock,
  *
  * MT safe.
  *
- * Returns: (transfer full): a #GstClockID containing the next pending clock
+ * Returns: (transfer full) (nullable): a #GstClockID containing the next pending clock
  * notification.
  *
  * Since: 1.2
@@ -1035,6 +1035,92 @@ gst_test_clock_wait_for_multiple_pending_ids (GstTestClock * test_clock,
 }
 
 /**
+ * gst_test_clock_timed_wait_for_multiple_pending_ids:
+ * @test_clock: #GstTestClock for which to await having enough pending clock
+ * @count: the number of pending clock notifications to wait for
+ * @timeout_ms: the timeout in milliseconds
+ * @pending_list: (out) (element-type Gst.ClockID) (transfer full) (allow-none): Address
+ *     of a #GList pointer variable to store the list of pending #GstClockIDs
+ *     that expired, or %NULL
+ *
+ * Blocks until at least @count clock notifications have been requested from
+ * @test_clock, or the timeout expires.
+ *
+ * MT safe.
+ *
+ * Returns: a @gboolean %TRUE if the waits have been registered, %FALSE if not.
+ * (Could be that it timed out waiting or that more waits than waits was found)
+ *
+ * Since: 1.16
+ */
+gboolean
+gst_test_clock_timed_wait_for_multiple_pending_ids (GstTestClock * test_clock,
+    guint count, guint timeout_ms, GList ** pending_list)
+{
+  GstTestClockPrivate *priv;
+  gint64 timeout = g_get_monotonic_time () +
+      timeout_ms * (G_USEC_PER_SEC / 1000);
+  gboolean ret;
+
+  g_return_val_if_fail (GST_IS_TEST_CLOCK (test_clock), FALSE);
+  priv = GST_TEST_CLOCK_GET_PRIVATE (test_clock);
+
+  GST_OBJECT_LOCK (test_clock);
+
+  while (g_list_length (priv->entry_contexts) < count &&
+      g_get_monotonic_time () < timeout) {
+    g_cond_wait_until (&priv->entry_added_cond,
+        GST_OBJECT_GET_LOCK (test_clock), timeout);
+  }
+
+  if (pending_list)
+    *pending_list = gst_test_clock_get_pending_id_list_unlocked (test_clock);
+
+  ret = (g_list_length (priv->entry_contexts) == count);
+
+  GST_OBJECT_UNLOCK (test_clock);
+
+  return ret;
+}
+
+
+/**
+ * gst_test_clock_process_id:
+ * @test_clock: #GstTestClock for which to process the pending IDs
+ * @pending_id: (transfer full): #GstClockID
+ *
+ * Processes and releases the pending ID.
+ *
+ * MT safe.
+ *
+ * Since: 1.18
+ */
+gboolean
+gst_test_clock_process_id (GstTestClock * test_clock, GstClockID pending_id)
+{
+  GstClockEntryContext *ctx;
+
+  gboolean result = FALSE;
+
+  g_return_val_if_fail (GST_IS_TEST_CLOCK (test_clock), FALSE);
+
+  GST_OBJECT_LOCK (test_clock);
+
+  ctx = gst_test_clock_lookup_entry_context (test_clock, pending_id);
+  g_assert (ctx);
+
+  if (ctx) {
+    process_entry_context_unlocked (test_clock, ctx);
+    result = TRUE;
+    gst_clock_id_unref (pending_id);
+  }
+
+  GST_OBJECT_UNLOCK (test_clock);
+
+  return result;
+}
+
+/**
  * gst_test_clock_process_id_list:
  * @test_clock: #GstTestClock for which to process the pending IDs
  * @pending_list: (element-type Gst.ClockID) (transfer none) (allow-none): List
@@ -1104,7 +1190,8 @@ gst_test_clock_id_list_get_latest_time (const GList * pending_list)
  *
  * A "crank" consists of three steps:
  * 1: Wait for a #GstClockID to be registered with the #GstTestClock.
- * 2: Advance the #GstTestClock to the time the #GstClockID is waiting for.
+ * 2: Advance the #GstTestClock to the time the #GstClockID is waiting, unless
+ *    the clock time is already passed the clock id (Since: 1.18).
  * 3: Release the #GstClockID wait.
  * A "crank" can be though of as the notion of
  * manually driving the clock forward to its next logical step.
@@ -1119,10 +1206,13 @@ gboolean
 gst_test_clock_crank (GstTestClock * test_clock)
 {
   GstClockID res, pending;
+  GstClockTime now;
   gboolean result;
 
   gst_test_clock_wait_for_next_pending_id (test_clock, &pending);
-  gst_test_clock_set_time (test_clock, gst_clock_id_get_time (pending));
+  now = gst_clock_get_time (GST_CLOCK (test_clock));
+  if (gst_clock_id_get_time (pending) > now)
+    gst_test_clock_set_time (test_clock, gst_clock_id_get_time (pending));
   res = gst_test_clock_process_next_clock_id (test_clock);
   if (G_LIKELY (res == pending)) {
     GST_CAT_DEBUG_OBJECT (GST_CAT_TEST_CLOCK, test_clock,

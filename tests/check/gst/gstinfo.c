@@ -223,7 +223,42 @@ GST_START_TEST (info_log_handler)
   guint removed;
 
   removed = gst_debug_remove_log_function (gst_debug_log_default);
-  fail_unless (removed == 1);
+  fail_unless_equals_int (removed, 1);
+}
+
+GST_END_TEST;
+
+static void
+compare_gst_log_func (GstDebugCategory * category, GstDebugLevel level,
+    const gchar * file, const gchar * function, gint line, GObject * object,
+    GstDebugMessage * message, gpointer user_data)
+{
+  gboolean match;
+  gchar *log_line;
+
+  fail_unless_equals_pointer (user_data, NULL);
+
+  log_line = gst_debug_log_get_line (category, level, file, function, line,
+      object, message);
+
+  match = g_pattern_match_simple ("*:*:*.*0*DEBUG*check*gstinfo.c:*"
+      ":info_log_handler_get_line: test message\n", log_line);
+  fail_unless_equals_int (match, TRUE);
+  g_free (log_line);
+}
+
+GST_START_TEST (info_log_handler_get_line)
+{
+  gst_debug_remove_log_function (gst_debug_log_default);
+  gst_debug_add_log_function (compare_gst_log_func, NULL, NULL);
+
+  gst_debug_set_default_threshold (GST_LEVEL_LOG);
+  GST_DEBUG ("test message");
+
+  /* clean up */
+  gst_debug_set_default_threshold (GST_LEVEL_NONE);
+  gst_debug_add_log_function (gst_debug_log_default, NULL, NULL);
+  gst_debug_remove_log_function (compare_gst_log_func);
 }
 
 GST_END_TEST;
@@ -369,8 +404,8 @@ GST_START_TEST (info_set_and_unset_single)
   cat2 = gst_debug_category_get_threshold (states);
 
   gst_debug_set_default_threshold (orig);
-  fail_unless (cat1 = GST_LEVEL_DEBUG);
-  fail_unless (cat2 = GST_LEVEL_WARNING);
+  fail_unless_equals_int (cat1, GST_LEVEL_DEBUG);
+  fail_unless_equals_int (cat2, GST_LEVEL_WARNING);
 }
 
 GST_END_TEST;
@@ -399,9 +434,9 @@ GST_START_TEST (info_set_and_unset_multiple)
 
   gst_debug_set_default_threshold (orig);
 
-  fail_unless (cat1 = GST_LEVEL_DEBUG);
-  fail_unless (cat2 = GST_LEVEL_WARNING);
-  fail_unless (cat3 = GST_LEVEL_WARNING);
+  fail_unless_equals_int (cat1, GST_LEVEL_DEBUG);
+  fail_unless_equals_int (cat2, GST_LEVEL_WARNING);
+  fail_unless_equals_int (cat3, GST_LEVEL_WARNING);
 }
 
 GST_END_TEST;
@@ -480,9 +515,6 @@ GST_START_TEST (info_post_gst_init_category_registration)
     fail_unless_equals_int (gst_debug_category_get_threshold (cats[0xb10]),
         GST_LEVEL_LOG);
   }
-
-  for (i = 0; i < G_N_ELEMENTS (cats); ++i)
-    gst_debug_category_free (cats[i]);
 }
 
 GST_END_TEST;
@@ -501,6 +533,7 @@ gst_info_suite (void)
   tcase_add_test (tc_chain, info_segment_format_printf_extension);
   tcase_add_test (tc_chain, info_ptr_format_printf_extension);
   tcase_add_test (tc_chain, info_log_handler);
+  tcase_add_test (tc_chain, info_log_handler_get_line);
   tcase_add_test (tc_chain, info_dump_mem);
   tcase_add_test (tc_chain, info_fixme);
   tcase_add_test (tc_chain, info_old_printf_extensions);

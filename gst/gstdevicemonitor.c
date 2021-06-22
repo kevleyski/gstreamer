@@ -98,6 +98,9 @@
 #include "gst_private.h"
 #include "gstdevicemonitor.h"
 
+GST_DEBUG_CATEGORY_STATIC (devicemonitor_debug);
+#define GST_CAT_DEFAULT devicemonitor_debug
+
 struct _GstDeviceMonitorPrivate
 {
   gboolean started;
@@ -187,6 +190,8 @@ gst_device_monitor_class_init (GstDeviceMonitorClass * klass)
   object_class->set_property = gst_device_monitor_set_property;
   object_class->dispose = gst_device_monitor_dispose;
 
+  GST_DEBUG_CATEGORY_INIT (devicemonitor_debug, "devicemonitor", 0,
+      "debugging info for the device monitor");
   g_object_class_install_property (object_class, PROP_SHOW_ALL,
       g_param_spec_boolean ("show-all", "Show All",
           "Show all devices, even those from hidden providers",
@@ -234,15 +239,18 @@ bus_sync_message (GstBus * bus, GstMessage * message,
 {
   GstMessageType type = GST_MESSAGE_TYPE (message);
 
-  if (type == GST_MESSAGE_DEVICE_ADDED || type == GST_MESSAGE_DEVICE_REMOVED) {
+  if (type == GST_MESSAGE_DEVICE_ADDED || type == GST_MESSAGE_DEVICE_REMOVED ||
+      type == GST_MESSAGE_DEVICE_CHANGED) {
     gboolean matches = TRUE;
     GstDevice *device;
     GstDeviceProvider *provider;
 
     if (type == GST_MESSAGE_DEVICE_ADDED)
       gst_message_parse_device_added (message, &device);
-    else
+    else if (type == GST_MESSAGE_DEVICE_REMOVED)
       gst_message_parse_device_removed (message, &device);
+    else
+      gst_message_parse_device_changed (message, &device, NULL);
 
     GST_OBJECT_LOCK (monitor);
     provider =
@@ -376,6 +384,13 @@ again:
   devices = NULL;
   hidden = NULL;
 
+  for (i = 0; i < monitor->priv->providers->len; i++) {
+    GstDeviceProvider *provider =
+        g_ptr_array_index (monitor->priv->providers, i);
+
+    update_hidden_providers_list (&hidden, provider);
+  }
+
   cookie = monitor->priv->cookie;
 
   for (i = 0; i < monitor->priv->providers->len; i++) {
@@ -390,7 +405,6 @@ again:
       tmpdev = gst_device_provider_get_devices (provider);
 
       GST_OBJECT_LOCK (monitor);
-      update_hidden_providers_list (&hidden, provider);
     } else {
       tmpdev = NULL;
     }
@@ -496,14 +510,13 @@ again:
   while (pending) {
     GstDeviceProvider *provider = pending->data;
 
-    if (gst_device_provider_can_monitor (provider)) {
-      GST_OBJECT_UNLOCK (monitor);
+    GST_OBJECT_UNLOCK (monitor);
 
-      if (!gst_device_provider_start (provider))
-        goto start_failed;
+    if (!gst_device_provider_start (provider))
+      goto start_failed;
 
-      GST_OBJECT_LOCK (monitor);
-    }
+    GST_OBJECT_LOCK (monitor);
+
     started = g_list_prepend (started, provider);
     pending = g_list_delete_link (pending, pending);
 
@@ -558,15 +571,15 @@ gst_device_monitor_stop (GstDeviceMonitor * monitor)
     GstDeviceProvider *provider =
         g_ptr_array_index (monitor->priv->providers, i);
 
-    started = g_list_prepend (started, gst_object_ref (provider));
+    if (gst_device_provider_is_started (provider))
+      started = g_list_prepend (started, gst_object_ref (provider));
   }
   GST_OBJECT_UNLOCK (monitor);
 
   while (started) {
     GstDeviceProvider *provider = started->data;
 
-    if (gst_device_provider_can_monitor (provider))
-      gst_device_provider_stop (provider);
+    gst_device_provider_stop (provider);
 
     started = g_list_delete_link (started, started);
     gst_object_unref (provider);
@@ -886,7 +899,7 @@ gst_device_monitor_set_show_all_devices (GstDeviceMonitor * monitor,
  * gst_device_monitor_get_show_all_devices:
  * @monitor: a #GstDeviceMonitor
  *
- * Get if @monitor is curretly showing all devices, even those from hidden
+ * Get if @monitor is currently showing all devices, even those from hidden
  * providers.
  *
  * Returns: %TRUE when all devices will be shown.

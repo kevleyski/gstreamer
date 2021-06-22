@@ -45,6 +45,9 @@ G_BEGIN_DECLS
  * Available details for pipeline graphs produced by GST_DEBUG_BIN_TO_DOT_FILE()
  * and GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS().
  */
+/* FIXME: For GST_DEBUG_GRAPH_SHOW_VERBOSE ~0 -> 0xffffffff see
+ * https://bugzilla.gnome.org/show_bug.cgi?id=732633
+*/
 typedef enum {
   GST_DEBUG_GRAPH_SHOW_MEDIA_TYPE         = (1<<0),
   GST_DEBUG_GRAPH_SHOW_CAPS_DETAILS       = (1<<1),
@@ -52,7 +55,7 @@ typedef enum {
   GST_DEBUG_GRAPH_SHOW_STATES             = (1<<3),
   GST_DEBUG_GRAPH_SHOW_FULL_PARAMS        = (1<<4),
   GST_DEBUG_GRAPH_SHOW_ALL                = ((1<<4)-1),
-  GST_DEBUG_GRAPH_SHOW_VERBOSE            = (-1)
+  GST_DEBUG_GRAPH_SHOW_VERBOSE            = (gint) (0xffffffff)
 } GstDebugGraphDetails;
 
 
@@ -77,17 +80,21 @@ void gst_debug_bin_to_dot_file_with_ts (GstBin *bin, GstDebugGraphDetails detail
  * @file_name: output base filename (e.g. "myplayer")
  *
  * To aid debugging applications one can use this method to write out the whole
- * network of gstreamer elements that form the pipeline into an dot file.
+ * network of gstreamer elements that form the pipeline into a dot file.
  * This file can be processed with graphviz to get an image, like this:
- * |[
- *  dot -Tpng -oimage.png graph_lowlevel.dot
- * ]|
- * There is also a utility called xdot which allows you to view the dot file
+ *
+ * ``` shell
+ * dot -Tpng -oimage.png graph_lowlevel.dot
+ * ```
+ *
+ * There is also a utility called [xdot] which allows you to view the dot file
  * directly without converting it first.
  *
- * The macro is only active if the environment variable GST_DEBUG_DUMP_DOT_DIR
- * is set to a basepath (e.g. /tmp), and the GStreamer debugging subsystem is
- * enabled (i.e., no use of `./configure --disable-gst-debug')
+ * The macro is only active if the environment variable `GST_DEBUG_DUMP_DOT_DIR`
+ * is set to a basepath (e.g. `/tmp`), and the GStreamer debugging subsystem is
+ * enabled (i.e., no use of `./configure --disable-gst-debug`)
+ *
+ * [xdot]: https://pypi.org/project/xdot/
  */
 #define GST_DEBUG_BIN_TO_DOT_FILE(bin, details, file_name) gst_debug_bin_to_dot_file (bin, details, file_name)
 

@@ -169,14 +169,9 @@ GST_START_TEST (test_get_allowed_caps)
 {
   GstPad *src, *sink;
   GstCaps *caps, *gotcaps;
-  GstBuffer *buffer;
   GstPadLinkReturn plr;
 
   ASSERT_CRITICAL (gst_pad_get_allowed_caps (NULL));
-
-  buffer = gst_buffer_new ();
-  ASSERT_CRITICAL (gst_pad_get_allowed_caps ((GstPad *) buffer));
-  gst_buffer_unref (buffer);
 
   src = gst_pad_new ("src", GST_PAD_SRC);
   fail_if (src == NULL);
@@ -622,6 +617,21 @@ _handled_probe_handler (GstPad * pad, GstPadProbeInfo * info, gpointer userdata)
   return GST_PAD_PROBE_HANDLED;
 }
 
+static GstPadProbeReturn
+_cleaning_handled_probe_handler (GstPad * pad, GstPadProbeInfo * info,
+    gpointer userdata)
+{
+  GstFlowReturn customflow = (GstFlowReturn) GPOINTER_TO_INT (userdata);
+
+  /* We are handling the data, we unref it and we reset the data field */
+  if (!(GST_PAD_PROBE_INFO_TYPE (info) & GST_PAD_PROBE_TYPE_QUERY_BOTH))
+    gst_mini_object_unref (info->data);
+  GST_PAD_PROBE_INFO_FLOW_RETURN (info) = customflow;
+  GST_PAD_PROBE_INFO_DATA (info) = NULL;
+
+  return GST_PAD_PROBE_HANDLED;
+}
+
 
 
 GST_START_TEST (test_events_query_unlinked)
@@ -777,6 +787,22 @@ GST_START_TEST (test_push_unlinked)
     GST_DEBUG ("Testing with %s", gst_flow_get_name (fl));
     id = gst_pad_add_probe (src, GST_PAD_PROBE_TYPE_BUFFER,
         _handled_probe_handler, GINT_TO_POINTER (fl), NULL);
+    buffer = gst_buffer_new ();
+    gst_buffer_ref (buffer);
+    fail_unless (gst_pad_push (src, buffer) == fl);
+    ASSERT_MINI_OBJECT_REFCOUNT (buffer, "buffer", 1);
+    gst_buffer_unref (buffer);
+    gst_pad_remove_probe (src, id);
+
+  }
+
+  /* Same thing, except that this time we also set the info data field
+   * to NULL in the probe. We can because we are returning _HANDLED */
+  GST_DEBUG ("push buffer handled and custom return (with info data NULL'ed)");
+  for (fl = GST_FLOW_NOT_SUPPORTED; fl <= GST_FLOW_OK; fl += 1) {
+    GST_DEBUG ("Testing with %s", gst_flow_get_name (fl));
+    id = gst_pad_add_probe (src, GST_PAD_PROBE_TYPE_BUFFER,
+        _cleaning_handled_probe_handler, GINT_TO_POINTER (fl), NULL);
     buffer = gst_buffer_new ();
     gst_buffer_ref (buffer);
     fail_unless (gst_pad_push (src, buffer) == fl);
@@ -1326,7 +1352,9 @@ block_async_cb_return_ok (GstPad * pad, GstPadProbeInfo * info,
 static gpointer
 push_buffer_async (GstPad * pad)
 {
-  return GINT_TO_POINTER (gst_pad_push (pad, gst_buffer_new ()));
+  gpointer ret = GINT_TO_POINTER (gst_pad_push (pad, gst_buffer_new ()));
+  gst_object_unref (pad);
+  return ret;
 }
 
 static void
@@ -1349,7 +1377,7 @@ test_pad_blocking_with_type (GstPadProbeType type)
   id = gst_pad_add_probe (pad, type, block_async_cb_return_ok, NULL, NULL);
 
   thread = g_thread_try_new ("gst-check", (GThreadFunc) push_buffer_async,
-      pad, NULL);
+      gst_object_ref (pad), NULL);
 
   /* wait for the block */
   while (!gst_pad_is_blocking (pad)) {
@@ -1413,6 +1441,7 @@ static gpointer
 add_idle_probe_async (GstPad * pad)
 {
   gst_pad_add_probe (pad, GST_PAD_PROBE_TYPE_IDLE, idle_probe_wait, NULL, NULL);
+  gst_object_unref (pad);
 
   return NULL;
 }
@@ -1441,8 +1470,8 @@ GST_START_TEST (test_pad_blocking_with_probe_type_idle)
 
   idle_probe_running = FALSE;
   idle_thread =
-      g_thread_try_new ("gst-check", (GThreadFunc) add_idle_probe_async, srcpad,
-      NULL);
+      g_thread_try_new ("gst-check", (GThreadFunc) add_idle_probe_async,
+      gst_object_ref (srcpad), NULL);
 
   /* wait for the idle function to signal it is being called */
   while (!idle_probe_running) {
@@ -1450,7 +1479,7 @@ GST_START_TEST (test_pad_blocking_with_probe_type_idle)
   }
 
   thread = g_thread_try_new ("gst-check", (GThreadFunc) push_buffer_async,
-      srcpad, NULL);
+      gst_object_ref (srcpad), NULL);
 
   while (!gst_pad_is_blocking (srcpad)) {
     g_usleep (10000);
@@ -1507,6 +1536,8 @@ pull_range_async (GstPad * pad)
   GstFlowReturn res = gst_pad_pull_range (pad, 0, 100, &buf);
   if (buf)
     gst_buffer_unref (buf);
+  gst_object_unref (pad);
+
   return GINT_TO_POINTER (res);
 }
 
@@ -1533,7 +1564,7 @@ GST_START_TEST (test_pad_probe_pull)
       block_async_cb_return_ok, NULL, NULL);
 
   thread = g_thread_try_new ("gst-check", (GThreadFunc) pull_range_async,
-      sinkpad, NULL);
+      gst_object_ref (sinkpad), NULL);
 
   /* wait for the block */
   while (!gst_pad_is_blocking (sinkpad)) {
@@ -1603,7 +1634,7 @@ GST_START_TEST (test_pad_probe_pull_idle)
   idle_probe_called = FALSE;
   get_range_wait = TRUE;
   thread = g_thread_try_new ("gst-check", (GThreadFunc) pull_range_async,
-      sinkpad, NULL);
+      gst_object_ref (sinkpad), NULL);
 
   /* wait for the block */
   while (!getrange_waiting) {
@@ -1662,7 +1693,7 @@ GST_START_TEST (test_pad_probe_pull_buffer)
   pull_probe_called_with_bad_data = FALSE;
 
   thread = g_thread_try_new ("gst-check", (GThreadFunc) pull_range_async,
-      sinkpad, NULL);
+      gst_object_ref (sinkpad), NULL);
 
   /* wait for the block */
   while (!pull_probe_called && !pull_probe_called_with_bad_data
@@ -1692,9 +1723,6 @@ static GstPadProbeReturn
 probe_remove_self_cb (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
 {
   gst_pad_remove_probe (pad, info->id);
-
-  fail_unless (pad->num_probes == 0);
-  fail_unless (pad->num_blocked == 0);
 
   return GST_PAD_PROBE_REMOVE;
 }
@@ -1732,6 +1760,52 @@ GST_START_TEST (test_pad_probe_remove)
 }
 
 GST_END_TEST;
+
+GST_START_TEST (test_pad_disjoint_blocks_probe_remove)
+{
+  GstPad *pad;
+
+  /* Test that installing 2 separate blocking probes - one on events
+   * and one on buffers, and then removing the blocking event probe
+   * releases the dataflow until a buffer is caught
+   *
+   * https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/658
+   */
+  pad = gst_pad_new ("src", GST_PAD_SRC);
+  fail_unless (pad != NULL);
+
+  gst_pad_set_active (pad, TRUE);
+  fail_unless (pad->num_probes == 0);
+  fail_unless (pad->num_blocked == 0);
+  gst_pad_add_probe (pad,
+      GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
+      probe_remove_self_cb, NULL, probe_remove_notify_cb);
+  fail_unless (pad->num_probes == 1);
+  fail_unless (pad->num_blocked == 1);
+
+  gst_pad_add_probe (pad,
+      GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER,
+      probe_remove_self_cb, NULL, probe_remove_notify_cb);
+  fail_unless (pad->num_probes == 2);
+  fail_unless (pad->num_blocked == 2);
+
+  pad_probe_remove_notifiy_called = FALSE;
+  gst_pad_push_event (pad, gst_event_new_stream_start ("asda"));
+
+  fail_unless (gst_pad_push_event (pad,
+          gst_event_new_segment (&dummy_segment)) == TRUE);
+
+  pad_probe_remove_notifiy_called = FALSE;
+  gst_pad_push (pad, gst_buffer_new ());
+
+  fail_unless (pad->num_probes == 0);
+  fail_unless (pad->num_blocked == 0);
+
+  gst_object_unref (pad);
+}
+
+GST_END_TEST;
+
 
 typedef struct
 {
@@ -1812,28 +1886,19 @@ GST_START_TEST (test_pad_probe_block_and_drop_buffer)
 GST_END_TEST;
 
 static GstPadProbeReturn
-probe_block_a (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
+probe_block_ok (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
 {
+  gboolean *called = user_data;
+  if (called)
+    *called = TRUE;
   return GST_PAD_PROBE_OK;
 }
 
 static GstPadProbeReturn
-probe_block_b (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
+probe_block_remove (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
 {
-  gboolean *probe_b_called = user_data;
-
-  *probe_b_called = TRUE;
-
-  return GST_PAD_PROBE_OK;
-}
-
-static GstPadProbeReturn
-probe_block_c (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
-{
-  gboolean *probe_c_called = user_data;
-
-  *probe_c_called = TRUE;
-
+  gboolean *called = user_data;
+  *called = TRUE;
   return GST_PAD_PROBE_REMOVE;
 }
 
@@ -1842,8 +1907,8 @@ GST_START_TEST (test_pad_probe_block_add_remove)
   GstPad *pad;
   GThread *thread;
   gulong probe_a, probe_b;
-  gboolean probe_b_called = FALSE;
-  gboolean probe_c_called = FALSE;
+  gboolean called;
+  guint r;
 
   pad = gst_pad_new ("src", GST_PAD_SRC);
   fail_unless (pad != NULL);
@@ -1859,53 +1924,59 @@ GST_START_TEST (test_pad_probe_block_add_remove)
 
   probe_a = gst_pad_add_probe (pad,
       GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER,
-      probe_block_a, NULL, NULL);
+      probe_block_ok, NULL, NULL);
 
   fail_unless (pad->num_probes == 1);
   fail_unless (pad->num_blocked == 1);
 
   thread = g_thread_try_new ("gst-check", (GThreadFunc) push_buffer_async,
-      pad, NULL);
+      gst_object_ref (pad), NULL);
 
   /* wait for the block */
-  while (!gst_pad_is_blocking (pad)) {
-    g_usleep (10000);
+  while (!gst_pad_is_blocking (pad))
+    g_thread_yield ();
+
+  /* alternate 2 probes 100 times */
+  for (r = 0; r < 100; r++) {
+    called = FALSE;
+    probe_b = gst_pad_add_probe (pad,
+        GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER,
+        probe_block_ok, &called, NULL);
+
+    gst_pad_remove_probe (pad, probe_a);
+
+    /* wait for the callback */
+    while (!called)
+      g_thread_yield ();
+
+    called = FALSE;
+    probe_a = gst_pad_add_probe (pad,
+        GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER,
+        probe_block_ok, &called, NULL);
+
+    gst_pad_remove_probe (pad, probe_b);
+
+    /* wait for the callback */
+    while (!called)
+      g_thread_yield ();
   }
 
-  probe_b = gst_pad_add_probe (pad,
+  called = FALSE;
+  gst_pad_add_probe (pad,
       GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER,
-      probe_block_b, &probe_b_called, NULL);
+      probe_block_remove, &called, NULL);
 
   gst_pad_remove_probe (pad, probe_a);
 
   /* wait for the callback */
-  while (!probe_b_called) {
-    g_usleep (10000);
-  }
-
-  /* wait for the block */
-  while (!gst_pad_is_blocking (pad)) {
-    g_usleep (10000);
-  }
-
-  gst_pad_add_probe (pad,
-      GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER,
-      probe_block_c, &probe_c_called, NULL);
-
-  gst_pad_remove_probe (pad, probe_b);
-
-  /* wait for the callback */
-  while (!probe_c_called) {
-    g_usleep (10000);
-  }
+  while (!called)
+    g_thread_yield ();
 
   /* wait for the unblock */
-  while (gst_pad_is_blocking (pad)) {
-    g_usleep (10000);
-  }
+  while (gst_pad_is_blocking (pad))
+    g_thread_yield ();
 
   gst_object_unref (pad);
-
   g_thread_join (thread);
 }
 
@@ -3319,6 +3390,7 @@ gst_pad_suite (void)
   tcase_add_test (tc_chain, test_pad_probe_pull_idle);
   tcase_add_test (tc_chain, test_pad_probe_pull_buffer);
   tcase_add_test (tc_chain, test_pad_probe_remove);
+  tcase_add_test (tc_chain, test_pad_disjoint_blocks_probe_remove);
   tcase_add_test (tc_chain, test_pad_probe_block_add_remove);
   tcase_add_test (tc_chain, test_pad_probe_block_and_drop_buffer);
   tcase_add_test (tc_chain, test_pad_probe_flush_events);

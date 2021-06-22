@@ -196,7 +196,7 @@ gst_device_set_property (GObject * object, guint prop_id,
  * Creates the element with all of the required parameters set to use
  * this device.
  *
- * Returns: (transfer full) (nullable): a new #GstElement configured to use
+ * Returns: (transfer floating) (nullable): a new #GstElement configured to use
  * this device
  *
  * Since: 1.4
@@ -205,13 +205,22 @@ GstElement *
 gst_device_create_element (GstDevice * device, const gchar * name)
 {
   GstDeviceClass *klass = GST_DEVICE_GET_CLASS (device);
+  GstElement *element = NULL;
 
   g_return_val_if_fail (GST_IS_DEVICE (device), NULL);
 
   if (klass->create_element)
-    return klass->create_element (device, name);
-  else
-    return NULL;
+    element = klass->create_element (device, name);
+
+  if (element && !g_object_is_floating ((GObject *) element)) {
+    /* The reference we receive here should be floating, but we can't force
+     * it at our level. Simply raise a critical to make the issue obvious to bindings
+     * developers */
+    g_critical ("The created element should be floating, "
+        "this is probably caused by faulty bindings");
+  }
+
+  return element;
 }
 
 /**

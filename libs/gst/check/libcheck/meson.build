@@ -72,7 +72,9 @@ foreach arg : [
   '-Wno-missing-prototypes',
   '-Wno-missing-declarations',
   '-Wno-old-style-definition',
-  '-Wno-declaration-after-statement']
+  '-Wno-declaration-after-statement',
+  '-Wno-format-nonliteral',
+  '-Wno-tautological-constant-out-of-range-compare']
   if cc.has_argument(arg)
     no_warn_args += [arg]
   endif
@@ -81,7 +83,7 @@ endforeach
 libcheck = static_library('check',
   libcheck_files,
   include_directories : [configinc, internal_check_h_inc],
-  dependencies : [rt_lib, mathlib],
+  dependencies : [rt_lib, mathlib, glib_dep],
   c_args: gst_c_args + libcheck_visibility_args + no_warn_args +
 	  # Don't want libcompat to think we don't have these and substitute
 	  # replacements since we don't check for or define these. See libcompat.h

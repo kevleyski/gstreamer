@@ -622,7 +622,7 @@ gst_preset_default_get_property_names (GstPreset * preset)
         g_free (props);
       }
 
-      g_object_unref (child);
+      gst_object_unref (child);
     }
   }
   if (!result) {
@@ -1322,7 +1322,7 @@ gst_preset_base_init (gpointer g_class)
 GType
 gst_preset_get_type (void)
 {
-  static volatile gsize type = 0;
+  static gsize type = 0;
 
   if (g_once_init_enter (&type)) {
     GType _type;

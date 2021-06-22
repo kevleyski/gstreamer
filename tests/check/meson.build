@@ -78,14 +78,17 @@ core_tests = [
   [ 'libs/typefindhelper.c' ],
   [ 'libs/queuearray.c' ],
   [ 'elements/capsfilter.c', not gst_registry ],
+  [ 'elements/clocksync.c', not gst_registry or not gst_parse ],
   [ 'elements/concat.c', not gst_registry ],
   [ 'elements/dataurisrc.c', not gst_registry ],
   [ 'elements/fakesrc.c', not gst_registry ],
-  [ 'elements/fdsrc.c', not gst_registry ],
+  # FIXME: blocked forever on Windows due to missing fcntl (.. O_NONBLOCK)
+  [ 'elements/fdsrc.c', not gst_registry or host_system == 'windows' ],
   [ 'elements/filesink.c', not gst_registry ],
   [ 'elements/filesrc.c', not gst_registry ],
   [ 'elements/funnel.c', not gst_registry ],
   [ 'elements/identity.c', not gst_registry or not gst_parse ],
+  [ 'elements/leaks.c', not tracer_hooks or not gst_debug ],
   [ 'elements/multiqueue.c', not gst_registry ],
   [ 'elements/selector.c', not gst_registry ],
   [ 'elements/streamiddemux.c', not gst_registry ],
@@ -110,7 +113,7 @@ core_tests = [
 ]
 
 # Make sure our headers are C++ clean
-if add_languages('cpp', required : false)
+if add_languages('cpp', native: false, required: false)
   core_tests += [
     [ 'gst/gstcpp.cc', not gst_registry ],
     [ 'libs/gstlibscpp.cc', false ],
@@ -122,7 +125,6 @@ test_defines = [
   '-UG_DISABLE_CAST_CHECKS',
   '-DGST_CHECK_TEST_ENVIRONMENT_BEACON="GST_STATE_IGNORE_ELEMENTS"',
   '-DTESTFILE="' + meson.current_source_dir() + '/meson.build"',
-  '-DGST_USE_UNSTABLE_API',
   '-DGST_DISABLE_DEPRECATED',
 ]
 

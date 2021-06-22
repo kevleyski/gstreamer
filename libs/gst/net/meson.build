@@ -16,6 +16,7 @@ gst_net_headers = [
  'gstnetcontrolmessagemeta.h',
  'gstnettimepacket.h',
  'gstnettimeprovider.h',
+ 'gstnetutils.h',
  'gstptpclock.h',
  'net-prelude.h',
  'net.h',
@@ -32,6 +33,14 @@ gst_net = library('gstnet-@0@'.format(apiversion),
   darwin_versions : osxversion,
   install : true,
   dependencies : [gio_dep, gst_base_dep],
+)
+
+pkgconfig.generate(gst_net,
+  libraries : [libgst],
+  variables : pkgconfig_variables,
+  subdirs : pkgconfig_subdirs,
+  name : 'gstreamer-net-1.0',
+  description : 'Network-enabled GStreamer plug-ins and clocking',
 )
 
 if build_gir
@@ -56,3 +65,5 @@ gst_net_dep = declare_dependency(link_with : gst_net,
   include_directories : [libsinc],
   sources: gst_net_gen_sources,
   dependencies : [gst_base_dep])
+
+meson.override_dependency('gstreamer-net-1.0', gst_net_dep)
