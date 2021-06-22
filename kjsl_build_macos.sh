@@ -1,2 +1,3 @@
 export XML_CATALOG_FILES="/usr/local/etc/xml/catalog"
-./autogen.sh
+meson build
+ninja -C build
