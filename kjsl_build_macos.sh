@@ -1,3 +1,39 @@
+#!/bin/bash
+HERE=$PWD
+
 export XML_CATALOG_FILES="/usr/local/etc/xml/catalog"
-meson build
-ninja -C build
+export PATH="/usr/local/opt/bison/bin:$PATH"
+export LDFLAGS="-L/usr/local/opt/bison/lib"
+
+deps () {
+  brew install glib gettext bison gobject-introspection  meson ninja pkg-config gnu-indent
+}
+
+install_gstreamer () {
+  cd "$HERE" || exit 1
+  meson build
+  ninja -C build
+  sudo ninja -C build install
+}
+
+install_plugins_base () {
+  cd "$HERE/../gst-plugins-base" || exit 1
+  meson build -Dglib:iconv=native -Dgst-plugins-base:examples=disabled -Dgst-plugins-bad:rtmp=disabled
+  ninja -C build
+  sudo ninja -C build install
+}
+
+install_plugins_good () {
+  cd "$HERE/../gst-plugins-good" || exit 1
+  meson build
+  ninja -C build
+  sudo ninja -C build install
+}
+
+install_plugins () {
+  install_plugins_base
+}
+
+deps
+install_gstreamer
+install_plugins
