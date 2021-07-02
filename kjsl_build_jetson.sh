@@ -1,16 +1,23 @@
 #!/bin/bash
 
-# KJSL: macOS GStreamer builder
+# KJSL: NVIDIA Jetson GStreamer builder
 
 HERE=$PWD
+NPROC=$(nproc)
 
 export XML_CATALOG_FILES="/usr/local/etc/xml/catalog"
 export PATH="/usr/local/opt/bison/bin:$PATH"
 export LDFLAGS="-L/usr/local/opt/bison/lib"
 
+export PKG_CONFIG_PATH=$HERE/out/lib/pkgconfig
+export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/lib/aarch64-linux-gnu/pkgconfig
+export LD_LIBRARY_PATH=$HERE/out/lib/
+
 deps () {
-  brew install glib gettext bison gobject-introspection graphene libogg libvorbis opus orc theora pango meson ninja pkg-config gnu-indent gtk-doc 
-  #brew xquartz
+  sudo apt-get install build-essential dpkg-dev flex bison autotools-dev \
+       automake autopoint libtool gtk-doc-tools libgstreamer1.0-dev libxv-dev libasound2-dev \
+       libtheora-dev libogg-dev libvorbis-dev libbz2-dev libv4l-dev libvpx-dev libjack-jackd2-dev \
+       libsoup2.4-dev libpulse-dev faad libfaad-dev libgl1-mesa-dev libgles2-mesa-dev libx264-dev libmad0-dev
 }
 
 install_gstreamer () {
