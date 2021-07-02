@@ -61,11 +61,20 @@ install_plugins_ugly () {
   sudo make install
 }
 
+install_plugins_libav () {
+  cd "$HERE/../gst-plugins-libav" || exit 1
+  ./autogen.sh
+  ./configure --prefix=$HERE/out
+  make -j $(nproc)
+  sudo make install
+}
+
 install_plugins () {
   install_plugins_base
   install_plugins_good
   install_plugins_bad
   install_plugins_ugly
+  install_plugins_libav
 }
 
 copy_nvidia () {
